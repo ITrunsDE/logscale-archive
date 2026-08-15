@@ -1,0 +1,41 @@
+{
+  "name": "@archive/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./backfill": {
+      "types": "./dist/backfill.d.ts",
+      "import": "./dist/backfill.js"
+    },
+    "./retention": {
+      "types": "./dist/retention.d.ts",
+      "import": "./dist/retention.js"
+    },
+    "./storageGuard": {
+      "types": "./dist/storageGuard.d.ts",
+      "import": "./dist/storageGuard.js"
+    },
+    "./backupJob": {
+      "types": "./dist/backupJob.d.ts",
+      "import": "./dist/backupJob.js"
+    },
+    "./restoreJob": {
+      "types": "./dist/restoreJob.d.ts",
+      "import": "./dist/restoreJob.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "health": "node dist/health.js"
+  },
+  "dependencies": {
+    "@archive/config": "workspace:*",
+    "@archive/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3"
+  }
+}

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/**]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: archive
+          POSTGRES_PASSWORD: change-me-local-only
+          POSTGRES_DB: archive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U archive -d archive"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://archive:change-me-local-only@127.0.0.1:5432/archive
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+  image-and-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f infra/Dockerfile -t archive:ci-${{ github.sha }} .
+
+      - name: Generate image checksum
+        run: |
+          docker save archive:ci-${{ github.sha }} | sha256sum | tee image.sha256
+
+      - name: Generate SBOM
+        run: |
+          chmod +x scripts/generate-sbom.sh
+          scripts/generate-sbom.sh archive:ci-${{ github.sha }} sbom.spdx.json || echo "SBOM generation skipped (syft/docker sbom unavailable)"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-artifacts-${{ github.sha }}
+          path: |
+            image.sha256
+            sbom.spdx.json
+          if-no-files-found: ignore

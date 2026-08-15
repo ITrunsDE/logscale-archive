@@ -1,0 +1,22 @@
+{
+  "name": "logscale-archive",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "build": "pnpm -r run build",
+    "dev:web": "pnpm --filter @archive/web dev",
+    "dev:worker": "pnpm --filter @archive/worker dev"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}

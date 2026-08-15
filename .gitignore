@@ -1,0 +1,23 @@
+# Local tooling — never ship
+.claude/
+.cursor/
+.worktrees/
+
+# Working specifications and plans — never ship
+docs/superpowers/
+
+# Dependencies and build
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+apps/web/client/
+apps/web/client/
+test-results/
+playwright-report/
+
+.DS_Store
+.env
+.env.*
+!/.env.example
+graphify-out/

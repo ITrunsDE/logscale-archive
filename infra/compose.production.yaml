@@ -1,0 +1,47 @@
+# Production overrides. Use with base compose:
+#   docker compose -f infra/compose.yaml -f infra/compose.production.yaml up -d
+#
+# External PostgreSQL (recommended):
+#   export DATABASE_URL='postgres://user:pass@db.example:5432/archive?sslmode=require'
+#   docker compose -f infra/compose.yaml -f infra/compose.production.yaml up -d web worker
+#
+# Bundled PostgreSQL (single-host only):
+#   docker compose -f infra/compose.yaml -f infra/compose.production.yaml --profile bundled-db up -d
+#   export REQUIRE_DB_TLS=false
+
+services:
+  postgres:
+    profiles: ["bundled-db"]
+
+  web:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      RECOVERY_SECRET: ${RECOVERY_SECRET:?RECOVERY_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      REQUIRE_DB_TLS: ${REQUIRE_DB_TLS:-true}
+      DATA_PATH: /data
+      BACKUP_PATH: /data/backups
+      EXPORT_PATH: /data/exports
+    volumes:
+      - app_data:/data
+      - backup_data:/data/backups
+      - exports_data:/data/exports
+
+  worker:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      REQUIRE_DB_TLS: ${REQUIRE_DB_TLS:-true}
+      DATA_PATH: /data
+      BACKUP_PATH: /data/backups
+      EXPORT_PATH: /data/exports
+    volumes:
+      - app_data:/data
+      - backup_data:/data/backups
+      - exports_data:/data/exports
+
+volumes:
+  app_data:
+  backup_data:
