@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useActionFeedback } from "../client/actionFeedback.js";
 
 type AuthUser = {
   id: string;
@@ -13,14 +14,6 @@ type RetentionHold = {
   queryName: string;
   versionNumber: number;
   createdAt: string;
-};
-
-type BackfillStatus = {
-  pending: number;
-  running: number;
-  complete: number;
-  failed: number;
-  paused: number;
 };
 
 type StorageStatus = {
@@ -55,18 +48,13 @@ async function api<T>(
 }
 
 export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
+  const flash = useActionFeedback();
   const [holds, setHolds] = useState<RetentionHold[]>([]);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [holdQueryVersionId, setHoldQueryVersionId] = useState("");
   const [holdReason, setHoldReason] = useState("");
   const [deleteQueryVersionId, setDeleteQueryVersionId] = useState("");
   const [deleteBefore, setDeleteBefore] = useState("");
-  const [backfillQueryVersionId, setBackfillQueryVersionId] = useState("");
-  const [backfillStart, setBackfillStart] = useState("");
-  const [backfillEnd, setBackfillEnd] = useState("");
-  const [backfillStatus, setBackfillStatus] = useState<BackfillStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   async function reload() {
     const [holdsResponse, statusResponse] = await Promise.all([
@@ -78,13 +66,12 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
   }
 
   useEffect(() => {
-    void reload().catch(() => setError("Failed to load retention data."));
+    void reload().catch(() => flash.err("Failed to load retention data."));
   }, [csrfToken]);
 
   async function onCreateHold(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    setMessage(null);
+    flash.busy("Saving hold…", "hold");
     try {
       await api(csrfToken, "/api/admin/retention/holds", {
         method: "POST",
@@ -95,49 +82,46 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
       });
       setHoldQueryVersionId("");
       setHoldReason("");
-      setMessage("Retention hold saved.");
+      flash.ok("Retention hold saved.");
       await reload();
     } catch {
-      setError("Could not create retention hold.");
+      flash.err("Could not create retention hold.");
     }
   }
 
   async function onReleaseHold(queryVersionId: string) {
-    setError(null);
-    setMessage(null);
+    flash.busy("Releasing hold…", `release:${queryVersionId}`);
     try {
       await api(csrfToken, `/api/admin/retention/holds/${queryVersionId}`, {
         method: "DELETE",
         body: "{}",
       });
-      setMessage("Retention hold released.");
+      flash.ok("Retention hold released.");
       await reload();
     } catch {
-      setError("Could not release retention hold.");
+      flash.err("Could not release retention hold.");
     }
   }
 
   async function onApplyRetention() {
-    setError(null);
-    setMessage(null);
+    flash.busy("Applying retention…", "apply");
     try {
       const result = await api<{ outcome: { deletedEvents: number; deletedAggregates: number } }>(
         csrfToken,
         "/api/admin/retention/apply",
         { method: "POST", body: "{}" },
       );
-      setMessage(
+      flash.ok(
         `Retention applied: ${result.outcome.deletedEvents} events, ${result.outcome.deletedAggregates} aggregates deleted.`,
       );
     } catch {
-      setError("Could not apply retention.");
+      flash.err("Could not apply retention.");
     }
   }
 
   async function onManualDelete(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    setMessage(null);
+    flash.busy("Deleting archived data…", "delete");
     try {
       const result = await api<{ deleted: { deletedEvents: number; deletedAggregates: number } }>(
         csrfToken,
@@ -150,72 +134,11 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
           }),
         },
       );
-      setMessage(
+      flash.ok(
         `Manual delete removed ${result.deleted.deletedEvents} events and ${result.deleted.deletedAggregates} aggregates.`,
       );
     } catch {
-      setError("Could not run manual delete.");
-    }
-  }
-
-  async function loadBackfillStatus() {
-    if (!backfillQueryVersionId.trim()) {
-      return;
-    }
-    const result = await api<{ status: BackfillStatus }>(
-      csrfToken,
-      `/api/admin/query-versions/${backfillQueryVersionId.trim()}/backfill/status`,
-    );
-    setBackfillStatus(result.status);
-  }
-
-  async function onCreateBackfill(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await api<{ status: BackfillStatus }>(
-        csrfToken,
-        `/api/admin/query-versions/${backfillQueryVersionId.trim()}/backfill`,
-        {
-          method: "POST",
-          body: JSON.stringify({ start: backfillStart, end: backfillEnd }),
-        },
-      );
-      setBackfillStatus(result.status);
-      setMessage("Backfill windows created.");
-    } catch {
-      setError("Could not create backfill.");
-    }
-  }
-
-  async function onPauseBackfill() {
-    setError(null);
-    setMessage(null);
-    try {
-      await api(csrfToken, `/api/admin/query-versions/${backfillQueryVersionId.trim()}/backfill/pause`, {
-        method: "POST",
-        body: "{}",
-      });
-      await loadBackfillStatus();
-      setMessage("Backfill paused.");
-    } catch {
-      setError("Could not pause backfill.");
-    }
-  }
-
-  async function onResumeBackfill() {
-    setError(null);
-    setMessage(null);
-    try {
-      await api(csrfToken, `/api/admin/query-versions/${backfillQueryVersionId.trim()}/backfill/resume`, {
-        method: "POST",
-        body: "{}",
-      });
-      await loadBackfillStatus();
-      setMessage("Backfill resumed.");
-    } catch {
-      setError("Could not resume backfill.");
+      flash.err("Could not run manual delete.");
     }
   }
 
@@ -225,9 +148,6 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
         <h1>Retention</h1>
         <p className="muted">Signed in as {user.username}</p>
       </header>
-
-      {error ? <p className="error">{error}</p> : null}
-      {message ? <p className="muted">{message}</p> : null}
 
       {storage ? (
         <section className="panel stack">
@@ -263,8 +183,13 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
                 <td>{hold.versionNumber}</td>
                 <td>{hold.reason}</td>
                 <td>
-                  <button type="button" onClick={() => void onReleaseHold(hold.queryVersionId)}>
-                    Release
+                  <button
+                    type="button"
+                    disabled={flash.anyBusy}
+                    aria-busy={flash.isBusy(`release:${hold.queryVersionId}`)}
+                    onClick={() => void onReleaseHold(hold.queryVersionId)}
+                  >
+                    {flash.isBusy(`release:${hold.queryVersionId}`) ? "Releasing…" : "Release"}
                   </button>
                 </td>
               </tr>
@@ -287,13 +212,20 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
           Reason
           <input value={holdReason} onChange={(event) => setHoldReason(event.target.value)} required />
         </label>
-        <button type="submit">Save hold</button>
+        <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("hold")}>
+          {flash.isBusy("hold") ? "Saving…" : "Save hold"}
+        </button>
       </form>
 
       <section className="panel stack">
         <h2>Retention actions</h2>
-        <button type="button" onClick={() => void onApplyRetention()}>
-          Apply retention now
+        <button
+          type="button"
+          disabled={flash.anyBusy}
+          aria-busy={flash.isBusy("apply")}
+          onClick={() => void onApplyRetention()}
+        >
+          {flash.isBusy("apply") ? "Applying…" : "Apply retention now"}
         </button>
       </section>
 
@@ -311,45 +243,9 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
           Before (optional ISO timestamp)
           <input value={deleteBefore} onChange={(event) => setDeleteBefore(event.target.value)} />
         </label>
-        <button type="submit">Delete archived data</button>
-      </form>
-
-      <form className="panel stack" onSubmit={onCreateBackfill}>
-        <h2>Backfill</h2>
-        <label>
-          Query version ID
-          <input
-            value={backfillQueryVersionId}
-            onChange={(event) => setBackfillQueryVersionId(event.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Start (ISO)
-          <input value={backfillStart} onChange={(event) => setBackfillStart(event.target.value)} required />
-        </label>
-        <label>
-          End (ISO)
-          <input value={backfillEnd} onChange={(event) => setBackfillEnd(event.target.value)} required />
-        </label>
-        <div className="row-actions">
-          <button type="submit">Create backfill</button>
-          <button type="button" onClick={() => void loadBackfillStatus()}>
-            Refresh status
-          </button>
-          <button type="button" onClick={() => void onPauseBackfill()}>
-            Pause
-          </button>
-          <button type="button" onClick={() => void onResumeBackfill()}>
-            Resume
-          </button>
-        </div>
-        {backfillStatus ? (
-          <p className="muted">
-            pending {backfillStatus.pending}, running {backfillStatus.running}, complete{" "}
-            {backfillStatus.complete}, paused {backfillStatus.paused}, failed {backfillStatus.failed}
-          </p>
-        ) : null}
+        <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("delete")}>
+          {flash.isBusy("delete") ? "Deleting…" : "Delete archived data"}
+        </button>
       </form>
     </div>
   );

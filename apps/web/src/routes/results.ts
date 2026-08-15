@@ -38,10 +38,10 @@ export async function registerResultsRoutes(
       }
 
       const jsonFilters = (body.jsonFilters ?? [])
-        .filter((filter) => filter.field?.trim())
+        .filter((filter) => filter.value?.trim())
         .map((filter) => ({
-          field: filter.field!.trim(),
-          value: filter.value ?? "",
+          field: filter.field?.trim() ?? "",
+          value: filter.value!.trim(),
         }));
 
       try {

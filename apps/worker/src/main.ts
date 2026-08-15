@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { loadConfig } from "@archive/config";
-import { claimNextRun, createDatabase, isMaintenanceMode } from "@archive/core";
+import {
+  claimNextRun,
+  createDatabase,
+  isMaintenanceMode,
+  reclaimOrphanedQueryRuns,
+} from "@archive/core";
 import { runAggregateArchiveJob } from "./aggregateArchiveJob.js";
 import { expireExports, processExportJobs } from "./exportJob.js";
 import { processScheduledBackup } from "./backupJob.js";
@@ -22,6 +27,8 @@ export type WorkerLoopDeps = {
   fetch?: typeof fetch;
   storageGuard?: import("./storageGuard.js").StorageGuardDeps;
   backup?: import("@archive/core").BackupDeps;
+  /** Runs with started_at before this are treated as orphans from a previous worker. */
+  bootAt?: Date;
 };
 
 export async function runWorkerTick(
@@ -30,6 +37,9 @@ export async function runWorkerTick(
   workerId: string,
 ): Promise<boolean> {
   touchHealth();
+  if (deps.bootAt) {
+    await reclaimOrphanedQueryRuns(db, deps.bootAt);
+  }
   await applyRetention(db);
   await expireExports(db);
   if (await processExportJobs(db)) {
@@ -74,7 +84,13 @@ async function main() {
 
   const db = createDatabase(config.databaseUrl);
   const workerId = process.env.WORKER_ID ?? randomUUID();
-  const deps: WorkerLoopDeps = { encryptionKey: config.encryptionKey };
+  const bootAt = new Date();
+  const deps: WorkerLoopDeps = { encryptionKey: config.encryptionKey, bootAt };
+
+  const reclaimed = await reclaimOrphanedQueryRuns(db, bootAt);
+  if (reclaimed > 0) {
+    console.info(`reclaimed ${reclaimed} orphaned running query run(s)`);
+  }
 
   touchHealth();
   const tick = async () => {

@@ -104,7 +104,7 @@ function detectColumns(rows: StoredResultRow[], fixed: string[]): string[] {
 
 function buildJsonFilterClauses(
   jsonFilters: JsonFieldFilter[] | undefined,
-  columnPrefix: string,
+  documentExpr: string,
   params: unknown[],
 ): string {
   if (!jsonFilters?.length) {
@@ -112,14 +112,36 @@ function buildJsonFilterClauses(
   }
   return jsonFilters
     .map((filter) => {
-      params.push(filter.field);
-      const fieldIndex = params.length;
-      params.push(filter.value);
+      const value = filter.value.trim();
+      if (!value) {
+        return "";
+      }
+      const field = filter.field.trim();
+      params.push(value);
       const valueIndex = params.length;
-      return ` AND ${columnPrefix}->>$${fieldIndex} = $${valueIndex}`;
+      if (!field) {
+        // Value-only: substring match anywhere in the result document (case-insensitive).
+        return ` AND position(lower($${valueIndex}) in lower((${documentExpr})::text)) > 0`;
+      }
+      params.push(field);
+      const fieldIndex = params.length;
+      // Field + value: substring match on that column (case-insensitive).
+      return ` AND position(lower($${valueIndex}) in lower(coalesce((${documentExpr})->>$${fieldIndex}, ''))) > 0`;
     })
     .join("");
 }
+
+const EVENT_SEARCH_DOCUMENT = `(er.payload || jsonb_build_object(
+  'source_repo', to_jsonb(er.source_repo::text),
+  'source_event_id', to_jsonb(er.source_event_id::text),
+  'event_timestamp', to_jsonb(er.event_timestamp)
+))`;
+
+const AGGREGATE_SEARCH_DOCUMENT = `(ag.payload || ag.dimensions || jsonb_build_object(
+  'repository', to_jsonb(ag.repository::text),
+  'window_start', to_jsonb(ag.window_start),
+  'window_end', to_jsonb(ag.window_end)
+))`;
 
 export function exportRoot(env: NodeJS.ProcessEnv = process.env): string {
   return env.EXPORT_PATH ?? "/var/archive/exports";
@@ -180,15 +202,15 @@ export async function searchStoredResults(
   const limit = clampLimit(filters.limit);
   const offset = filters.offset ?? 0;
   const params: unknown[] = [filters.queryVersionId, filters.from ?? null, filters.to ?? null];
-  const jsonClause = buildJsonFilterClauses(filters.jsonFilters, "payload", params);
 
   if (mode === "event") {
+    const jsonClause = buildJsonFilterClauses(filters.jsonFilters, EVENT_SEARCH_DOCUMENT, params);
     const count = await db.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
-       FROM event_records
-       WHERE query_version_id = $1
-         AND ($2::timestamptz IS NULL OR event_timestamp >= $2)
-         AND ($3::timestamptz IS NULL OR event_timestamp < $3)
+       FROM event_records er
+       WHERE er.query_version_id = $1
+         AND ($2::timestamptz IS NULL OR er.event_timestamp >= $2)
+         AND ($3::timestamptz IS NULL OR er.event_timestamp < $3)
          ${jsonClause}`,
       params,
     );
@@ -240,12 +262,13 @@ export async function searchStoredResults(
     };
   }
 
+  const jsonClause = buildJsonFilterClauses(filters.jsonFilters, AGGREGATE_SEARCH_DOCUMENT, params);
   const count = await db.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count
-     FROM aggregate_snapshots
-     WHERE query_version_id = $1
-       AND ($2::timestamptz IS NULL OR window_start >= $2)
-       AND ($3::timestamptz IS NULL OR window_end <= $3)
+     FROM aggregate_snapshots ag
+     WHERE ag.query_version_id = $1
+       AND ($2::timestamptz IS NULL OR ag.window_start >= $2)
+       AND ($3::timestamptz IS NULL OR ag.window_end <= $3)
        ${jsonClause}`,
     params,
   );
@@ -513,6 +536,31 @@ export async function expireExports(
   return expired.rowCount ?? expired.rows.length;
 }
 
+export async function deleteExport(
+  db: Database,
+  exportId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<"ok" | "not_found" | "running"> {
+  const job = await getExport(db, exportId);
+  if (!job) {
+    return "not_found";
+  }
+  if (job.status === "running") {
+    return "running";
+  }
+
+  if (job.filePath && isExportPath(job.filePath, env)) {
+    try {
+      unlinkSync(job.filePath);
+    } catch {
+      // file may already be gone
+    }
+  }
+
+  await db.query(`DELETE FROM exports WHERE id = $1`, [exportId]);
+  return "ok";
+}
+
 export async function listSearchableQueryVersions(db: Database): Promise<
   Array<{
     id: string;
@@ -521,6 +569,7 @@ export async function listSearchableQueryVersions(db: Database): Promise<
     mode: QueryMode;
     connectionName: string;
     repository: string;
+    active: boolean;
   }>
 > {
   const result = await db.query<{
@@ -530,12 +579,12 @@ export async function listSearchableQueryVersions(db: Database): Promise<
     mode: QueryMode;
     connection_name: string;
     repository: string;
+    active: boolean;
   }>(
-    `SELECT qv.id, qv.name, qv.version_number, qv.mode,
+    `SELECT qv.id, qv.name, qv.version_number, qv.mode, qv.active,
             lc.name AS connection_name, lc.repository
      FROM query_versions qv
      JOIN logscale_connections lc ON lc.id = qv.connection_id
-     WHERE qv.active = true
      ORDER BY lc.name ASC, qv.name ASC, qv.version_number DESC`,
   );
 
@@ -546,5 +595,6 @@ export async function listSearchableQueryVersions(db: Database): Promise<
     mode: row.mode,
     connectionName: row.connection_name,
     repository: row.repository,
+    active: row.active,
   }));
 }

@@ -21,6 +21,9 @@ describe("LogScaleClient", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: `Bearer ${TOKEN}` });
       expect(String(url)).toContain("/queryjobs");
+      const body = JSON.parse(String(init?.body)) as { start: number; end: number };
+      expect(body.start).toBe(Date.parse("2026-01-01T00:00:00Z"));
+      expect(body.end).toBe(Date.parse("2026-01-01T01:00:00Z"));
       return jsonResponse({ id: "job-1", state: "running" });
     });
 
@@ -66,6 +69,27 @@ describe("LogScaleClient", () => {
 
     expect(first.status).toBe("running");
     expect(second.status).toBe("done");
+  });
+
+  it("maps LogScale done/cancelled booleans from poll responses", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        id: "job-done",
+        done: true,
+        cancelled: false,
+        events: [],
+      }),
+    );
+
+    const client = new LogScaleClient({
+      endpoint: ENDPOINT,
+      repository: REPO,
+      token: TOKEN,
+      fetch: fetchMock,
+    });
+
+    const status = await client.pollQueryJob("job-done");
+    expect(status).toEqual({ id: "job-done", status: "done" });
   });
 
   it("retries retryable HTTP errors", async () => {

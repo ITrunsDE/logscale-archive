@@ -10,11 +10,13 @@ import {
   createDatabase,
   createExport,
   createUser,
+  deleteExport,
   encryptSecret,
   encryptedSecretToBytes,
   expireExports,
   exportFilePath,
   isExportPath,
+  listSearchableQueryVersions,
   migrateDatabase,
   pathsIncludedInBackup,
   searchStoredResults,
@@ -178,6 +180,20 @@ describe("archived results search and exports", () => {
   afterEach(() => {
     resetLoginRateLimiter();
     vi.restoreAllMocks();
+  });
+
+  it("lists inactive query versions for archived search", async () => {
+    applyEnv();
+    const db = createDatabase(DATABASE_URL);
+    const { queryVersionId } = await seedArchivedEvents(db);
+    await db.query(`UPDATE query_versions SET active = false WHERE id = $1`, [queryVersionId]);
+
+    const versions = await listSearchableQueryVersions(db);
+    const match = versions.find((version) => version.id === queryVersionId);
+    expect(match).toBeDefined();
+    expect(match?.active).toBe(false);
+
+    await db.close();
   });
 
   it("filters archived results by metadata, time, and JSON fields without LogScale", async () => {
@@ -357,6 +373,44 @@ describe("archived results search and exports", () => {
     expect(existsSync(expected)).toBe(true);
     expect(isExportPath(expected)).toBe(true);
 
+    await db.close();
+  });
+
+  it("deletes export row and file", async () => {
+    applyEnv();
+    loadConfig();
+    const db = createDatabase(DATABASE_URL);
+    const { queryVersionId } = await seedArchivedEvents(db);
+    const owner = await createUser(db, {
+      username: "export-deleter",
+      password: "viewer-password-14",
+      role: "viewer",
+    });
+
+    const job = await createExport(db, {
+      queryVersionId,
+      format: "csv",
+      filters: { queryVersionId },
+      requestedByUserId: owner.id,
+    });
+    await processExportJobs(db);
+    const path = exportFilePath(job.id, "csv");
+    expect(existsSync(path)).toBe(true);
+
+    const { app } = await buildServer();
+    await app.ready();
+    const session = await login(app, "export-deleter", "viewer-password-14");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/exports/${job.id}`,
+      headers: { cookie: session.cookie, "x-csrf-token": session.csrf },
+    });
+    expect(deleted.statusCode).toBe(204);
+    expect(existsSync(path)).toBe(false);
+    expect(await deleteExport(db, job.id)).toBe("not_found");
+
+    await app.close();
     await db.close();
   });
 });

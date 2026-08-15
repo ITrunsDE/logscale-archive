@@ -4,6 +4,7 @@ import type { Database } from "@archive/core";
 import {
   canDownloadExport,
   createExport,
+  deleteExport,
   getExport,
   listExports,
   type ExportFormat,
@@ -93,6 +94,41 @@ export async function registerExportRoutes(
         return;
       }
       reply.send({ export: job });
+    },
+  );
+
+  app.delete(
+    "/api/exports/:exportId",
+    { preHandler: requireRole("viewer") },
+    async (request, reply) => {
+      requireCsrf(request, reply);
+      if (reply.sent) {
+        return;
+      }
+
+      const { exportId } = request.params as { exportId: string };
+      const job = await getExport(db, exportId);
+      if (!job) {
+        reply.code(404).send({ error: "not_found" });
+        return;
+      }
+      if (
+        !canDownloadExport(job, request.session!.user.id, request.session!.user.role)
+      ) {
+        reply.code(403).send({ error: "forbidden" });
+        return;
+      }
+
+      const result = await deleteExport(db, exportId);
+      if (result === "running") {
+        reply.code(409).send({ error: "running" });
+        return;
+      }
+      if (result === "not_found") {
+        reply.code(404).send({ error: "not_found" });
+        return;
+      }
+      reply.code(204).send();
     },
   );
 

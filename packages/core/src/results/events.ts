@@ -1,5 +1,6 @@
 import { writeAuditEntry } from "../audit/writeAuditEntry.js";
 import type { Database } from "../db/repositories.js";
+import { jsonForPostgres } from "../db/jsonForPostgres.js";
 import type { QueryRunKind } from "../jobs/leases.js";
 import { LogScaleClient } from "../logscale/client.js";
 import type { FetchFn, LogScaleClientConfig } from "../logscale/types.js";
@@ -64,15 +65,33 @@ function isRetryableArchiveError(error: unknown): boolean {
   );
 }
 
-function eventTimestamp(event: Record<string, unknown>): string {
+/** Resolve LogScale event time; supports epoch ms/sec numbers and ISO strings. */
+export function resolveEventTimestamp(event: Record<string, unknown>, now = () => new Date()): string {
   const raw = event["@timestamp"] ?? event._time ?? event.timestamp;
-  if (raw != null) {
-    const parsed = Date.parse(String(raw));
-    if (!Number.isNaN(parsed)) {
-      return new Date(parsed).toISOString();
+  if (raw == null) {
+    return now().toISOString();
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const ms = raw < 1e12 ? raw * 1000 : raw;
+    return new Date(ms).toISOString();
+  }
+  const text = String(raw).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const num = Number(text);
+    if (Number.isFinite(num)) {
+      const ms = num < 1e12 ? num * 1000 : num;
+      return new Date(ms).toISOString();
     }
   }
-  return new Date().toISOString();
+  const parsed = Date.parse(text);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString();
+  }
+  return now().toISOString();
+}
+
+function eventTimestamp(event: Record<string, unknown>): string {
+  return resolveEventTimestamp(event);
 }
 
 function createLogScaleClient(
@@ -134,7 +153,7 @@ async function persistPage(
           sourceRepo,
           sourceEventId,
           eventTimestamp(record),
-          JSON.stringify(record),
+          jsonForPostgres(record),
         ],
       );
       count += result.rowCount ?? 0;
@@ -172,12 +191,15 @@ async function markRunComplete(
   eventCount: number,
 ): Promise<void> {
   await db.withTransaction(async (client) => {
-    await client.query(
+    const updated = await client.query(
       `UPDATE query_runs
        SET status = 'complete', failure_reason = NULL, result_count = $2, finished_at = now()
-       WHERE id = $1`,
+       WHERE id = $1 AND status = 'running'`,
       [runId, eventCount],
     );
+    if ((updated.rowCount ?? 0) === 0) {
+      return;
+    }
 
     const parent = await client.query<{ parent_run_id: string | null }>(
       `SELECT parent_run_id FROM query_runs WHERE id = $1`,
@@ -204,6 +226,14 @@ async function markRunComplete(
       );
     }
   });
+
+  const stillComplete = await db.query<{ status: string }>(
+    `SELECT status FROM query_runs WHERE id = $1`,
+    [runId],
+  );
+  if (stillComplete.rows[0]?.status !== "complete") {
+    return;
+  }
 
   await writeAuditEntry(db, {
     action: "event_archive.complete",
@@ -373,12 +403,15 @@ async function markRunFailed(
   retryable: boolean,
 ): Promise<void> {
   const status = retryable ? "pending" : "failed";
-  await db.query(
+  const updated = await db.query(
     `UPDATE query_runs
      SET status = $2, failure_reason = $3, finished_at = CASE WHEN $4 THEN NULL ELSE now() END
-     WHERE id = $1`,
+     WHERE id = $1 AND status IN ('pending', 'running')`,
     [runId, status, message.slice(0, 500), retryable],
   );
+  if ((updated.rowCount ?? 0) === 0) {
+    return;
+  }
 
   await writeAuditEntry(db, {
     action: retryable ? "event_archive.retry" : "event_archive.failed",
@@ -394,6 +427,18 @@ async function markRunFailed(
   });
 }
 
+async function isRunCancelled(db: Database, runId: string): Promise<boolean> {
+  const result = await db.query<{ status: string; active: boolean }>(
+    `SELECT qr.status, qv.active
+     FROM query_runs qr
+     JOIN query_versions qv ON qv.id = qr.query_version_id
+     WHERE qr.id = $1`,
+    [runId],
+  );
+  const row = result.rows[0];
+  return !row || row.status === "cancelled" || !row.active;
+}
+
 export async function archiveEventWindow(
   db: Database,
   deps: EventArchiveDeps,
@@ -403,6 +448,10 @@ export async function archiveEventWindow(
   const ctx = await loadRunContext(db, runId);
   if (!ctx) {
     return { ok: false, eventCount: 0, retryable: false, error: "run_not_found" };
+  }
+
+  if (await isRunCancelled(db, runId)) {
+    return { ok: false, eventCount: 0, retryable: false, error: "run_cancelled" };
   }
 
   const token = decryptSecret(
@@ -428,12 +477,18 @@ export async function archiveEventWindow(
     let status = job.status;
     let warnings: string[] = [];
     for (let attempt = 0; attempt < pollAttempts && status === "running"; attempt += 1) {
+      if (await isRunCancelled(db, runId)) {
+        return { ok: false, eventCount: totalEvents, retryable: false, error: "run_cancelled" };
+      }
       await sleep(pollIntervalMs);
       const poll = await client.pollQueryJob(job.id);
       status = poll.status;
       if (poll.warnings?.length) {
         warnings = poll.warnings;
       }
+    }
+    if (await isRunCancelled(db, runId)) {
+      return { ok: false, eventCount: totalEvents, retryable: false, error: "run_cancelled" };
     }
     if (status !== "done") {
       const message = "Query job did not complete successfully";
@@ -448,9 +503,17 @@ export async function archiveEventWindow(
     let offset = 0;
     let pageIndex = 0;
     let done = false;
+    let reportedTotal: number | undefined;
+    let lastPageFull = false;
 
     while (!done) {
+      if (await isRunCancelled(db, runId)) {
+        return { ok: false, eventCount: totalEvents, retryable: false, error: "run_cancelled" };
+      }
       const page = await client.getResultPage(jobId, offset, pageSize);
+      reportedTotal = page.total;
+      // LogScale often ignores limit and returns the full silent cap (e.g. 200) in one page.
+      lastPageFull = page.events.length >= pageSize;
       if (page.events.length > 0) {
         await persistPage(db, ctx, runId, pageIndex, page.events, deps.hooks);
         totalEvents += page.events.length;
@@ -458,6 +521,18 @@ export async function archiveEventWindow(
       done = page.done || page.events.length === 0;
       offset += page.events.length;
       pageIndex += 1;
+    }
+
+    // Cap without warning: job ends on a full page, or reported total exceeds fetched rows.
+    const truncated =
+      lastPageFull ||
+      (reportedTotal != null && Number.isFinite(reportedTotal) && reportedTotal > totalEvents);
+    if (truncated && totalEvents > 0) {
+      return handleResultCap(db, deps, ctx, runId, window, [
+        reportedTotal != null && reportedTotal > totalEvents
+          ? `Result total ${reportedTotal} exceeds fetched ${totalEvents}`
+          : `Result page full at ${totalEvents} events without exhaustion`,
+      ]);
     }
 
     const stored = await db.query<{ count: string }>(
@@ -469,6 +544,9 @@ export async function archiveEventWindow(
     await markRunComplete(db, runId, ctx.query_version_id, ctx.kind, window, eventCount);
     return { ok: true, eventCount, retryable: false };
   } catch (error) {
+    if (await isRunCancelled(db, runId)) {
+      return { ok: false, eventCount: totalEvents, retryable: false, error: "run_cancelled" };
+    }
     const retryable =
       (error as { retryable?: boolean }).retryable === true ||
       isRetryableArchiveError(error);

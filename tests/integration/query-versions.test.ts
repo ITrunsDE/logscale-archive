@@ -392,6 +392,32 @@ describe("query versions", () => {
     });
     expect(invalid.statusCode).toBe(400);
 
+    const secondDraft = await app.inject({
+      method: "POST",
+      url: "/api/admin/query-versions/drafts",
+      headers: { cookie, "content-type": "application/json", "x-csrf-token": csrf },
+      payload: {
+        connectionId,
+        name: "errors",
+        queryText: "#repo=repo-a",
+        mode: "event",
+        scheduleCron: "0 * * * *",
+        initialStartAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    expect(secondDraft.statusCode).toBe(201);
+
+    const names = await app.inject({
+      method: "GET",
+      url: `/api/admin/query-versions?connectionId=${connectionId}`,
+      headers: { cookie },
+    });
+    expect(names.statusCode).toBe(200);
+    expect(names.json().names).toEqual([
+      { name: "errors", active: false },
+      { name: "events", active: true },
+    ]);
+
     const listed = await app.inject({
       method: "GET",
       url: `/api/admin/query-versions?connectionId=${connectionId}&name=events`,

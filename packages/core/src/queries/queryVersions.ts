@@ -24,7 +24,16 @@ export type QueryVersion = {
   active: boolean;
   testPassedAt: string | null;
   createdAt: string;
+  nextRunAt: string | null;
 };
+
+export const DEFAULT_SCHEDULE_CRON = "0 * * * *";
+export const DEFAULT_SCHEDULE_TIMEZONE = "UTC";
+
+export function normalizeScheduleCron(cron: string | null | undefined): string {
+  const trimmed = cron?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_SCHEDULE_CRON;
+}
 
 export type CreateQueryDraftInput = {
   connectionId: string;
@@ -79,7 +88,18 @@ export type QueryVersionsDeps = {
   createClient?: (config: LogScaleClientConfig) => LogScaleClient;
 };
 
-function toQueryVersion(row: QueryVersionRow): QueryVersion {
+function asIso(value: Date | string | null | undefined): string | null {
+  if (value == null) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function toQueryVersion(row: QueryVersionRow, nextRunAt: string | null = null): QueryVersion {
   return {
     id: row.id,
     connectionId: row.connection_id,
@@ -89,12 +109,13 @@ function toQueryVersion(row: QueryVersionRow): QueryVersion {
     mode: row.mode,
     scheduleCron: row.schedule_cron,
     scheduleTimezone: row.schedule_timezone,
-    initialStartAt: row.initial_start_at.toISOString(),
+    initialStartAt: asIso(row.initial_start_at) ?? new Date(0).toISOString(),
     correctionWindowSeconds: row.correction_window_seconds,
     retentionDays: row.retention_days,
     active: row.active,
-    testPassedAt: row.test_passed_at?.toISOString() ?? null,
-    createdAt: row.created_at.toISOString(),
+    testPassedAt: asIso(row.test_passed_at),
+    createdAt: asIso(row.created_at) ?? new Date(0).toISOString(),
+    nextRunAt,
   };
 }
 
@@ -151,21 +172,52 @@ function createLogScaleClient(
   return deps.createClient ? deps.createClient(config) : new LogScaleClient(config);
 }
 
+export type QueryNameSummary = {
+  name: string;
+  active: boolean;
+};
+
+export async function listQueryNames(
+  db: Database,
+  connectionId: string,
+): Promise<QueryNameSummary[]> {
+  const result = await db.query<{ name: string; active: boolean }>(
+    `SELECT name, bool_or(active) AS active
+     FROM query_versions
+     WHERE connection_id = $1
+     GROUP BY name
+     ORDER BY name ASC`,
+    [connectionId],
+  );
+  return result.rows.map((row) => ({ name: row.name, active: row.active }));
+}
+
 export async function listQueryVersions(
   db: Database,
   connectionId: string,
   name: string,
 ): Promise<QueryVersion[]> {
-  const result = await db.query<QueryVersionRow>(
-    `SELECT id, connection_id, name, version_number, query_text, mode,
-            schedule_cron, schedule_timezone, initial_start_at, correction_window_seconds,
-            retention_days, active, test_passed_at, created_at
-     FROM query_versions
-     WHERE connection_id = $1 AND name = $2
-     ORDER BY version_number DESC`,
+  const result = await db.query<
+    QueryVersionRow & {
+      next_run_at: Date | null;
+      schedule_paused: boolean | null;
+    }
+  >(
+    `SELECT qv.id, qv.connection_id, qv.name, qv.version_number, qv.query_text, qv.mode,
+            qv.schedule_cron, qv.schedule_timezone, qv.initial_start_at, qv.correction_window_seconds,
+            qv.retention_days, qv.active, qv.test_passed_at, qv.created_at,
+            qs.next_run_at, qs.paused AS schedule_paused
+     FROM query_versions qv
+     LEFT JOIN query_schedules qs ON qs.query_version_id = qv.id
+     WHERE qv.connection_id = $1 AND qv.name = $2
+     ORDER BY qv.version_number DESC`,
     [connectionId, name],
   );
-  return result.rows.map(toQueryVersion);
+  return result.rows.map((row) => {
+    const nextRunAt =
+      row.schedule_paused === true ? null : asIso(row.next_run_at);
+    return toQueryVersion(row, nextRunAt);
+  });
 }
 
 export async function createQueryDraft(
@@ -183,6 +235,8 @@ export async function createQueryDraft(
   }
 
   const versionNumber = await nextVersionNumber(db, input.connectionId, input.name);
+  const scheduleCron = normalizeScheduleCron(input.scheduleCron);
+  const scheduleTimezone = input.scheduleTimezone?.trim() || DEFAULT_SCHEDULE_TIMEZONE;
   const inserted = await db.query<QueryVersionRow>(
     `INSERT INTO query_versions
        (connection_id, name, version_number, query_text, mode, schedule_cron, schedule_timezone,
@@ -197,8 +251,8 @@ export async function createQueryDraft(
       versionNumber,
       input.queryText,
       input.mode,
-      input.scheduleCron ?? null,
-      input.scheduleTimezone ?? "UTC",
+      scheduleCron,
+      scheduleTimezone,
       input.initialStartAt,
       input.correctionWindowSeconds ?? 0,
       input.retentionDays ?? null,
@@ -254,9 +308,15 @@ export async function testQueryVersion(
     jobId = job.id;
 
     let status = job.status;
-    for (let attempt = 0; attempt < 30 && status === "running"; attempt += 1) {
-      await sleep(20);
-      status = (await client.pollQueryJob(job.id)).status;
+    for (let attempt = 0; attempt < 60 && status === "running"; attempt += 1) {
+      await sleep(500);
+      const polled = await client.pollQueryJob(job.id);
+      status = polled.status;
+      if (status === "failed" || status === "cancelled") {
+        const errors = [polled.error ?? `Query job ended with status ${status}`];
+        await finishTestRun(db, runId, "failed", errors[0]!);
+        return { ok: false, errors, eventCount: 0, sampleEvents: [] };
+      }
     }
     if (status !== "done") {
       const errors = ["Query job did not complete successfully"];
@@ -357,6 +417,80 @@ export async function deactivateQueryVersion(db: Database, id: string): Promise<
      WHERE query_version_id = $1`,
     [id],
   );
+  await db.query(
+    `UPDATE query_runs
+     SET status = 'cancelled',
+         failure_reason = 'query deactivated',
+         finished_at = now()
+     WHERE query_version_id = $1
+       AND status IN ('pending', 'running')`,
+    [id],
+  );
+  await db.query(
+    `UPDATE backfill_windows
+     SET status = 'paused', updated_at = now()
+     WHERE query_version_id = $1
+       AND status = 'pending'`,
+    [id],
+  );
+}
+
+export async function renameQuery(
+  db: Database,
+  connectionId: string,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  const trimmed = newName.trim();
+  if (!trimmed) {
+    throw Object.assign(new Error("invalid_name"));
+  }
+  if (trimmed === oldName) {
+    return;
+  }
+
+  const clash = await db.query(
+    `SELECT 1 FROM query_versions WHERE connection_id = $1 AND name = $2 LIMIT 1`,
+    [connectionId, trimmed],
+  );
+  if (clash.rows.length > 0) {
+    throw Object.assign(new Error("name_taken"));
+  }
+
+  const updated = await db.query(
+    `UPDATE query_versions
+     SET name = $3
+     WHERE connection_id = $1 AND name = $2`,
+    [connectionId, oldName, trimmed],
+  );
+  if ((updated.rowCount ?? 0) === 0) {
+    throw Object.assign(new Error("not_found"));
+  }
+}
+
+export async function deleteQueryVersion(db: Database, id: string): Promise<void> {
+  const row = await loadVersion(db, id);
+  if (!row) {
+    throw Object.assign(new Error("not_found"));
+  }
+  if (row.active) {
+    throw Object.assign(new Error("active_version"));
+  }
+
+  await db.withTransaction(async (client) => {
+    await client.query(`DELETE FROM retention_holds WHERE query_version_id = $1`, [id]);
+    await client.query(`DELETE FROM query_schedules WHERE query_version_id = $1`, [id]);
+    await client.query(`DELETE FROM backfill_windows WHERE query_version_id = $1`, [id]);
+    await client.query(`DELETE FROM event_records WHERE query_version_id = $1`, [id]);
+    await client.query(`DELETE FROM aggregate_snapshots WHERE query_version_id = $1`, [id]);
+    await client.query(`UPDATE exports SET query_version_id = NULL WHERE query_version_id = $1`, [id]);
+    await client.query(
+      `DELETE FROM query_runs WHERE query_version_id = $1 AND parent_run_id IS NOT NULL`,
+      [id],
+    );
+    await client.query(`DELETE FROM query_runs WHERE query_version_id = $1`, [id]);
+    await client.query(`DELETE FROM query_versions WHERE id = $1`, [id]);
+  });
 }
 
 function sleep(ms: number): Promise<void> {

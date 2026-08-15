@@ -87,7 +87,7 @@ async function loginAsAdmin(app: Awaited<ReturnType<typeof buildServer>>["app"])
 function mockLogscaleFetch(): typeof fetch {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/version")) {
+    if (url.endsWith("/api/v1/status")) {
       return new Response(JSON.stringify({ version: "1.201.0" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -125,6 +125,7 @@ describe("logscale connection routes", () => {
 
   it("stores encrypted tokens and never returns plaintext from the API", async () => {
     applyEnv({});
+    vi.stubGlobal("fetch", mockLogscaleFetch());
     const config = loadConfig(process.env);
     const { app } = await buildServer();
     await app.ready();
@@ -147,7 +148,11 @@ describe("logscale connection routes", () => {
       name: "Primary",
       endpoint: "https://logscale.example",
       repository: "repo-a",
-      status: "unknown",
+      status: "valid",
+    });
+    expect(created.json().validation).toMatchObject({
+      ok: true,
+      repositoryAccessible: true,
     });
     expect(created.json().connection).not.toHaveProperty("token");
 
@@ -173,6 +178,61 @@ describe("logscale connection routes", () => {
     await app.close();
   });
 
+  it("updates a connection and validates immediately, keeping token when omitted", async () => {
+    applyEnv({});
+    vi.stubGlobal("fetch", mockLogscaleFetch());
+    const config = loadConfig(process.env);
+    const { app } = await buildServer();
+    await app.ready();
+    const { cookie, csrf } = await loginAsAdmin(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/admin/logscale-connections",
+      headers: { cookie, "content-type": "application/json", "x-csrf-token": csrf },
+      payload: {
+        name: "Editable",
+        endpoint: "https://logscale-edit.example",
+        repository: "repo-a",
+        token: TEST_TOKEN,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const connectionId = created.json().connection.id as string;
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/admin/logscale-connections/${connectionId}`,
+      headers: { cookie, "content-type": "application/json", "x-csrf-token": csrf },
+      payload: {
+        name: "Editable Renamed",
+        endpoint: "https://cloud.community.humio.com",
+        repository: "repo-a",
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().connection).toMatchObject({
+      name: "Editable Renamed",
+      endpoint: "https://cloud.community.humio.com",
+      repository: "repo-a",
+      status: "valid",
+    });
+    expect(updated.json().validation.ok).toBe(true);
+    expect(JSON.stringify(updated.json())).not.toContain(TEST_TOKEN);
+
+    const db = createDatabase(DATABASE_URL);
+    const stored = await db.query<{ token_ciphertext: Buffer }>(
+      "SELECT token_ciphertext FROM logscale_connections WHERE id = $1",
+      [connectionId],
+    );
+    expect(
+      decryptSecret(encryptedSecretFromBytes(stored.rows[0]!.token_ciphertext), config.encryptionKey),
+    ).toBe(TEST_TOKEN);
+
+    await db.close();
+    await app.close();
+  });
+
   it("validates a connection and records permission warnings", async () => {
     applyEnv({});
     vi.stubGlobal("fetch", mockLogscaleFetch());
@@ -193,6 +253,12 @@ describe("logscale connection routes", () => {
       },
     });
     expect(created.statusCode).toBe(201);
+    expect(created.json().connection.status).toBe("valid");
+    expect(created.json().validation).toMatchObject({
+      ok: true,
+      repositoryAccessible: true,
+      serverVersion: "1.201.0",
+    });
     const connectionId = created.json().connection.id as string;
 
     const validated = await app.inject({
@@ -219,7 +285,7 @@ describe("logscale connection routes", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.endsWith("/api/v1/version")) {
+        if (url.endsWith("/api/v1/status")) {
           return new Response(JSON.stringify({ version: "1.201.0" }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -248,6 +314,9 @@ describe("logscale connection routes", () => {
       },
     });
     expect(created.statusCode).toBe(201);
+    expect(created.json().connection.status).toBe("invalid");
+    expect(created.json().validation.ok).toBe(false);
+    expect(created.json().validation.repositoryAccessible).toBe(false);
     const connectionId = created.json().connection.id as string;
 
     const validated = await app.inject({
@@ -270,7 +339,7 @@ describe("logscale connection routes", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.endsWith("/api/v1/version")) {
+        if (url.endsWith("/api/v1/status")) {
           return new Response(JSON.stringify({ version: "1.201.0" }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -308,6 +377,9 @@ describe("logscale connection routes", () => {
       },
     });
     expect(created.statusCode).toBe(201);
+    expect(created.json().connection.status).toBe("warning");
+    expect(created.json().validation.ok).toBe(false);
+    expect(created.json().validation.permissionWarnings.length).toBeGreaterThan(0);
     const connectionId = created.json().connection.id as string;
 
     const validated = await app.inject({

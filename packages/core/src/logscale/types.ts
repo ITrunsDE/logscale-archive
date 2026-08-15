@@ -4,7 +4,7 @@
  * GET    /api/v1/repositories/{repo}/queryjobs/{id}
  * GET    /api/v1/repositories/{repo}/queryjobs/{id}/results?offset=&limit=
  * DELETE /api/v1/repositories/{repo}/queryjobs/{id}
- * GET    /api/v1/version
+ * GET    /api/v1/status
  * GET    /api/v1/repositories/{repo}
  * GET    /api/v1/self
  */

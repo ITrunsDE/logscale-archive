@@ -8,6 +8,7 @@ import {
   encryptSecret,
   encryptedSecretToBytes,
   migrateDatabase,
+  reclaimOrphanedQueryRuns,
 } from "@archive/core";
 import { runWorkerTick } from "../../apps/worker/src/main.js";
 
@@ -256,6 +257,52 @@ describe("event archive worker", () => {
 
     const second = await claimNextRun(db, "worker-b");
     expect(second).toBeNull();
+
+    await db.close();
+  });
+
+  it("reclaims orphaned running runs after worker restart", async () => {
+    applyEnv();
+    const config = loadConfig(process.env);
+    const db = createDatabase(DATABASE_URL);
+    const { queryVersionId } = await seedActiveEventQuery(db);
+    await insertPendingRun(db, queryVersionId, "scheduled", {
+      start: "2026-01-01T00:00:00.000Z",
+      end: "2026-01-01T01:00:00.000Z",
+    });
+
+    const claimed = await claimNextRun(db, "worker-old");
+    expect(claimed?.status).toBe("running");
+
+    // Simulate SIGKILL: status stays running, nothing else claims.
+    expect(await claimNextRun(db, "worker-new")).toBeNull();
+
+    const bootAt = new Date();
+    const reclaimed = await reclaimOrphanedQueryRuns(db, bootAt);
+    expect(reclaimed).toBe(1);
+
+    const fetchImpl = mockMultiPageFetch([[event("orphan-1")]]);
+    const worked = await runWorkerTick(
+      db,
+      {
+        encryptionKey: config.encryptionKey,
+        fetch: fetchImpl,
+        bootAt,
+        backup: {
+          dumpDatabase: async (_url, filePath) => {
+            await import("node:fs/promises").then((fs) => fs.writeFile(filePath, "-- test dump\n"));
+          },
+        },
+      },
+      "worker-new",
+    );
+    expect(worked).toBe(true);
+
+    const status = await db.query<{ status: string }>(
+      `SELECT status FROM query_runs WHERE id = $1`,
+      [claimed!.id],
+    );
+    expect(status.rows[0]?.status).toBe("complete");
 
     await db.close();
   });

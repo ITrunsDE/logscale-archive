@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useActionFeedback } from "../client/actionFeedback.js";
 
 type AuthUser = {
   id: string;
@@ -13,6 +14,7 @@ type QueryVersionOption = {
   mode: "event" | "aggregate";
   connectionName: string;
   repository: string;
+  active: boolean;
 };
 
 type StoredResultRow = {
@@ -40,6 +42,7 @@ type ResultsPageProps = {
   csrfToken: string;
   onRequestExport?: (filters: {
     queryVersionId: string;
+    format: "csv" | "ndjson";
     from?: string;
     to?: string;
     jsonFilters: Array<{ field: string; value: string }>;
@@ -102,17 +105,27 @@ function stampClass(status: string | null): string {
   return "stamp";
 }
 
+function fromLocalInput(local: string): string | undefined {
+  if (!local.trim()) {
+    return undefined;
+  }
+  const date = new Date(local);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
 export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPageProps) {
+  const flash = useActionFeedback();
   const [versions, setVersions] = useState<QueryVersionOption[]>([]);
   const [queryVersionId, setQueryVersionId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [jsonField, setJsonField] = useState("");
-  const [jsonValue, setJsonValue] = useState("");
+  const [fieldName, setFieldName] = useState("");
+  const [fieldValue, setFieldValue] = useState("");
   const [results, setResults] = useState<SearchResponse["results"] | null>(null);
   const [selected, setSelected] = useState<StoredResultRow | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     void api<{ versions: QueryVersionOption[] }>(csrfToken, "/api/results/query-versions")
@@ -122,7 +135,7 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
           setQueryVersionId(response.versions[0].id);
         }
       })
-      .catch(() => setError("Failed to load query versions."));
+      .catch(() => flash.err("Failed to load query versions."));
   }, [csrfToken]);
 
   useEffect(() => {
@@ -143,28 +156,30 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
     if (!queryVersionId) {
       return;
     }
-    setLoading(true);
-    setError(null);
+    flash.busy("Searching…", "search");
     try {
-      const jsonFilters = jsonField.trim()
-        ? [{ field: jsonField.trim(), value: jsonValue }]
+      const jsonFilters = fieldValue.trim()
+        ? [{ field: fieldName.trim(), value: fieldValue.trim() }]
         : [];
       const response = await api<SearchResponse>(csrfToken, "/api/results/search", {
         method: "POST",
         body: JSON.stringify({
           queryVersionId,
-          from: from || undefined,
-          to: to || undefined,
+          from: fromLocalInput(from),
+          to: fromLocalInput(to),
           jsonFilters,
           offset,
         }),
       });
       setResults(response.results);
       setSelected(null);
+      flash.ok(
+        response.results.total === 0
+          ? "No results."
+          : `Found ${response.results.total} result(s).`,
+      );
     } catch {
-      setError("Search failed.");
-    } finally {
-      setLoading(false);
+      flash.err("Search failed.");
     }
   }
 
@@ -175,8 +190,6 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
           <h1>Results</h1>
           <p className="muted">Signed in as {user.username}. Archived data only.</p>
         </header>
-
-        {error ? <p className="error">{error}</p> : null}
 
         <form className="panel wide-panel stack" onSubmit={(event) => void runSearch(event)}>
           <h2>Search archived results</h2>
@@ -189,48 +202,74 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
             >
               {versions.map((version) => (
                 <option key={version.id} value={version.id}>
-                  {version.connectionName} / {version.name} v{version.versionNumber} ({version.mode})
+                  {version.connectionName} / {version.name} v{version.versionNumber} ({version.mode}
+                  {version.active ? "" : ", inactive"})
                 </option>
               ))}
             </select>
           </label>
           <label>
-            From (ISO timestamp)
-            <input value={from} onChange={(event) => setFrom(event.target.value)} />
+            From
+            <input
+              type="datetime-local"
+              value={from}
+              onChange={(event) => setFrom(event.target.value)}
+            />
           </label>
           <label>
-            To (ISO timestamp)
-            <input value={to} onChange={(event) => setTo(event.target.value)} />
+            To
+            <input
+              type="datetime-local"
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+            />
           </label>
           <label>
-            JSON field
-            <input value={jsonField} onChange={(event) => setJsonField(event.target.value)} />
+            Field
+            <input
+              value={fieldName}
+              onChange={(event) => setFieldName(event.target.value)}
+              placeholder="optional — e.g. context.base_identifier"
+            />
           </label>
           <label>
-            JSON value
-            <input value={jsonValue} onChange={(event) => setJsonValue(event.target.value)} />
+            Value
+            <input
+              value={fieldValue}
+              onChange={(event) => setFieldValue(event.target.value)}
+              placeholder="e.g. Mozilla.Firefox"
+            />
           </label>
+          <p className="muted field-hint">
+            Contains match, case-insensitive. Field optional (empty = search all columns). Use full
+            column names like <span className="mono">context.base_identifier</span>.
+          </p>
           <div className="row-actions">
-            <button type="submit" disabled={loading}>
-              {loading ? "Searching…" : "Search"}
+            <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("search")}>
+              {flash.isBusy("search") ? "Searching…" : "Search"}
             </button>
-            {onRequestExport ? (
-              <button
-                type="button"
-                onClick={() =>
-                  onRequestExport({
-                    queryVersionId,
-                    from: from || undefined,
-                    to: to || undefined,
-                    jsonFilters: jsonField.trim()
-                      ? [{ field: jsonField.trim(), value: jsonValue }]
-                      : [],
-                  })
-                }
-              >
-                Export current filters
-              </button>
-            ) : null}
+            {onRequestExport
+              ? (["csv", "ndjson"] as const).map((format) => (
+                  <button
+                    key={format}
+                    type="button"
+                    disabled={flash.anyBusy || !queryVersionId}
+                    onClick={() =>
+                      onRequestExport({
+                        queryVersionId,
+                        format,
+                        from: fromLocalInput(from),
+                        to: fromLocalInput(to),
+                        jsonFilters: fieldValue.trim()
+                          ? [{ field: fieldName.trim(), value: fieldValue.trim() }]
+                          : [],
+                      })
+                    }
+                  >
+                    Export {format.toUpperCase()}
+                  </button>
+                ))
+              : null}
           </div>
         </form>
 
@@ -274,14 +313,14 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
             <div className="row-actions">
               <button
                 type="button"
-                disabled={results.offset <= 0}
+                disabled={flash.anyBusy || results.offset <= 0}
                 onClick={() => void runSearch(undefined, Math.max(0, results.offset - results.limit))}
               >
                 Previous
               </button>
               <button
                 type="button"
-                disabled={results.offset + results.limit >= results.total}
+                disabled={flash.anyBusy || results.offset + results.limit >= results.total}
                 onClick={() => void runSearch(undefined, results.offset + results.limit)}
               >
                 Next

@@ -16,15 +16,12 @@ In Falcon LogScale (cloud or self-hosted):
 1. Log in as admin → **Connections** → **Add connection**.
 2. Fields:
    - **Name** — label in archive UI
-   - **Endpoint** — base URL, e.g. `https://cloud.community.humio.com` or `https://logscale.example.com`
+   - **Endpoint** — API base URL only, e.g. `https://cloud.community.humio.com` (no `/humio`, no `/api/v1`)
    - **Repository** — repository name
    - **Token** — paste read-only token
-3. Click **Validate**. Archive checks:
-   - API reachability
-   - Repository access
-   - Permission warnings if token exceeds read-only
+3. Click **Save connection**. Archive stores the encrypted token and **validates immediately** (reachability, repository access, permission warnings).
 
-Validation stores encrypted token ciphertext. UI never shows token again.
+UI never shows the token again. Use **Edit** to change name/endpoint/repository; leave token blank to keep the stored one. Edit also validates immediately.
 
 ## Query requirements
 
@@ -40,10 +37,8 @@ Test query in UI before activation.
 ## Token rotation
 
 1. Create new token in LogScale.
-2. Edit connection in archive (or delete and re-add).
-3. Re-validate.
-
-Old token can be revoked in LogScale after validation succeeds.
+2. **Edit** connection → paste new token → save (auto-validates).
+3. Revoke old token in LogScale after status is valid.
 
 ## Troubleshooting
 

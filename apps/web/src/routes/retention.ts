@@ -181,14 +181,16 @@ export async function registerRetentionRoutes(
       }
 
       try {
-        await createBackfill(db, queryVersionId, body.start, body.end);
+        const outcome = await createBackfill(db, queryVersionId, body.start, body.end);
         await recordAuditAction(db, request, "backfill.create", {
           queryVersionId,
           start: body.start,
           end: body.end,
+          created: outcome.created,
+          requeued: outcome.requeued,
         });
         const status = await getBackfillStatus(db, queryVersionId);
-        reply.code(201).send({ status });
+        reply.code(201).send({ status, created: outcome.created, requeued: outcome.requeued });
       } catch (error) {
         if (error instanceof Error && error.message === "not_found") {
           reply.code(404).send({ error: "not_found" });
@@ -196,6 +198,10 @@ export async function registerRetentionRoutes(
         }
         if (error instanceof Error && error.message === "invalid_mode") {
           reply.code(409).send({ error: "invalid_mode" });
+          return;
+        }
+        if (error instanceof Error && error.message === "inactive_query") {
+          reply.code(409).send({ error: "inactive_query" });
           return;
         }
         if (error instanceof Error && error.message === "invalid_range") {
@@ -243,9 +249,21 @@ export async function registerRetentionRoutes(
       }
 
       const { queryVersionId } = request.params as { queryVersionId: string };
-      const resumed = await resumeBackfill(db, queryVersionId);
-      await recordAuditAction(db, request, "backfill.resume", { queryVersionId, resumed });
-      reply.send({ resumed });
+      try {
+        const resumed = await resumeBackfill(db, queryVersionId);
+        await recordAuditAction(db, request, "backfill.resume", { queryVersionId, resumed });
+        reply.send({ resumed });
+      } catch (error) {
+        if (error instanceof Error && error.message === "not_found") {
+          reply.code(404).send({ error: "not_found" });
+          return;
+        }
+        if (error instanceof Error && error.message === "inactive_query") {
+          reply.code(409).send({ error: "inactive_query" });
+          return;
+        }
+        throw error;
+      }
     },
   );
 }

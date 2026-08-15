@@ -87,7 +87,7 @@ CREATE TABLE query_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   query_version_id UUID NOT NULL REFERENCES query_versions(id),
   kind TEXT NOT NULL CHECK (kind IN ('scheduled', 'backfill', 'test')),
-  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'complete', 'failed', 'split')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'complete', 'failed', 'split', 'cancelled')),
   window_start TIMESTAMPTZ NOT NULL,
   window_end TIMESTAMPTZ NOT NULL,
   parent_run_id UUID REFERENCES query_runs(id),

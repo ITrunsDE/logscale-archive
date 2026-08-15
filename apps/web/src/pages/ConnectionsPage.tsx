@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useActionFeedback } from "../client/actionFeedback.js";
 
 type AuthUser = {
   id: string;
@@ -51,14 +52,15 @@ async function api<T>(
 }
 
 export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
+  const flash = useActionFeedback();
   const [connections, setConnections] = useState<PublicConnection[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [repository, setRepository] = useState("");
   const [token, setToken] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [validation, setValidation] = useState<ConnectionValidation | null>(null);
+  const [rowBusyId, setRowBusyId] = useState<string | null>(null);
 
   async function reload() {
     const result = await api<{ connections: PublicConnection[] }>(
@@ -69,34 +71,73 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
   }
 
   useEffect(() => {
-    void reload().catch(() => setError("Failed to load connections."));
+    void reload().catch(() => flash.err("Failed to load connections."));
   }, [csrfToken]);
 
-  async function onCreate(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    setMessage(null);
+  function resetForm() {
+    setEditingId(null);
+    setName("");
+    setEndpoint("");
+    setRepository("");
+    setToken("");
+  }
+
+  function startEdit(connection: PublicConnection) {
+    setEditingId(connection.id);
+    setName(connection.name);
+    setEndpoint(connection.endpoint);
+    setRepository(connection.repository);
+    setToken("");
     setValidation(null);
+    flash.clear();
+  }
+
+  function applySaveResult(
+    result: { connection: PublicConnection; validation: ConnectionValidation },
+    savedLabel: string,
+  ) {
+    setValidation(result.validation);
+    flash.ok(`${savedLabel} Status: ${result.connection.status}.`);
+    resetForm();
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    setValidation(null);
+    flash.busy(editingId ? "Updating connection…" : "Saving connection…", "save");
     try {
-      await api(csrfToken, "/api/admin/logscale-connections", {
-        method: "POST",
-        body: JSON.stringify({ name, endpoint, repository, token }),
-      });
-      setName("");
-      setEndpoint("");
-      setRepository("");
-      setToken("");
-      setMessage("Connection saved. Token is stored encrypted and is not shown again.");
+      if (editingId) {
+        const payload: Record<string, string> = { name, endpoint, repository };
+        if (token.trim()) {
+          payload.token = token.trim();
+        }
+        const result = await api<{ connection: PublicConnection; validation: ConnectionValidation }>(
+          csrfToken,
+          `/api/admin/logscale-connections/${editingId}`,
+          { method: "PATCH", body: JSON.stringify(payload) },
+        );
+        applySaveResult(result, "Connection updated.");
+      } else {
+        const result = await api<{ connection: PublicConnection; validation: ConnectionValidation }>(
+          csrfToken,
+          "/api/admin/logscale-connections",
+          {
+            method: "POST",
+            body: JSON.stringify({ name, endpoint, repository, token }),
+          },
+        );
+        applySaveResult(result, "Connection saved.");
+      }
       await reload();
     } catch {
-      setError("Could not save connection.");
+      flash.err(editingId ? "Could not update connection." : "Could not save connection.");
     }
   }
 
   async function onValidate(connectionId: string) {
-    setError(null);
-    setMessage(null);
     setValidation(null);
+    setRowBusyId(connectionId);
+    flash.busy("Validating…", `validate:${connectionId}`);
     try {
       const result = await api<{ connection: PublicConnection; validation: ConnectionValidation }>(
         csrfToken,
@@ -104,26 +145,33 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
         { method: "POST", body: "{}" },
       );
       setValidation(result.validation);
-      setMessage(`Validation finished with status ${result.connection.status}.`);
+      flash.ok(`Validation finished with status ${result.connection.status}.`);
       await reload();
     } catch {
-      setError("Could not validate connection.");
+      flash.err("Could not validate connection.");
+    } finally {
+      setRowBusyId(null);
     }
   }
 
   async function onDelete(connectionId: string) {
-    setError(null);
-    setMessage(null);
     setValidation(null);
+    setRowBusyId(connectionId);
+    flash.busy("Deleting…", `delete:${connectionId}`);
     try {
       await api(csrfToken, `/api/admin/logscale-connections/${connectionId}`, {
         method: "DELETE",
         body: "{}",
       });
-      setMessage("Connection deleted.");
+      if (editingId === connectionId) {
+        resetForm();
+      }
+      flash.ok("Connection deleted.");
       await reload();
     } catch {
-      setError("Could not delete connection.");
+      flash.err("Could not delete connection.");
+    } finally {
+      setRowBusyId(null);
     }
   }
 
@@ -133,9 +181,6 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
         <h1>LogScale connections</h1>
         <p className="muted">Signed in as {user.username}</p>
       </header>
-
-      {error ? <p className="error">{error}</p> : null}
-      {message ? <p className="muted">{message}</p> : null}
 
       <section className="panel stack">
         <h2>Saved connections</h2>
@@ -161,11 +206,28 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
                 <td>{connection.lastValidatedAt ?? "—"}</td>
                 <td>{connection.tokenExpiryWarning ?? "—"}</td>
                 <td>
-                  <button type="button" onClick={() => void onValidate(connection.id)}>
-                    Validate
+                  <button type="button" onClick={() => startEdit(connection)} disabled={flash.anyBusy}>
+                    Edit
                   </button>{" "}
-                  <button type="button" onClick={() => void onDelete(connection.id)}>
-                    Delete
+                  <button
+                    type="button"
+                    disabled={flash.anyBusy}
+                    aria-busy={flash.isBusy(`validate:${connection.id}`)}
+                    onClick={() => void onValidate(connection.id)}
+                  >
+                    {rowBusyId === connection.id && flash.isBusy(`validate:${connection.id}`)
+                      ? "Validating…"
+                      : "Validate"}
+                  </button>{" "}
+                  <button
+                    type="button"
+                    disabled={flash.anyBusy}
+                    aria-busy={flash.isBusy(`delete:${connection.id}`)}
+                    onClick={() => void onDelete(connection.id)}
+                  >
+                    {rowBusyId === connection.id && flash.isBusy(`delete:${connection.id}`)
+                      ? "Deleting…"
+                      : "Delete"}
                   </button>
                 </td>
               </tr>
@@ -192,11 +254,11 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
         </section>
       ) : null}
 
-      <form className="panel stack" onSubmit={onCreate}>
-        <h2>Add connection</h2>
+      <form className="panel stack" onSubmit={onSubmit}>
+        <h2>{editingId ? "Edit connection" : "Add connection"}</h2>
         <p className="muted">
           Tokens are encrypted at rest. Only name, endpoint, repository, and status are shown after
-          save.
+          save. Create and update run validation immediately.
         </p>
         <label>
           Name
@@ -207,7 +269,7 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
           <input
             value={endpoint}
             onChange={(event) => setEndpoint(event.target.value)}
-            placeholder="https://cloud.falcon.humio.com"
+            placeholder="https://cloud.community.humio.com"
             required
           />
         </label>
@@ -222,10 +284,23 @@ export function ConnectionsPage({ user, csrfToken }: ConnectionsPageProps) {
             value={token}
             onChange={(event) => setToken(event.target.value)}
             autoComplete="off"
-            required
+            required={!editingId}
+            placeholder={editingId ? "Leave blank to keep existing token" : undefined}
           />
         </label>
-        <button type="submit">Save connection</button>
+        <div>
+          <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("save")}>
+            {flash.isBusy("save") ? "Saving…" : editingId ? "Save changes" : "Save connection"}
+          </button>
+          {editingId ? (
+            <>
+              {" "}
+              <button type="button" onClick={resetForm} disabled={flash.anyBusy}>
+                Cancel
+              </button>
+            </>
+          ) : null}
+        </div>
       </form>
     </div>
   );

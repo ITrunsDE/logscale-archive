@@ -22,6 +22,8 @@ import { OperationsPage } from "../pages/OperationsPage.js";
 import { UsersPage } from "../pages/UsersPage.js";
 import { ResultsPage } from "../pages/ResultsPage.js";
 import { ExportsPage } from "../pages/ExportsPage.js";
+import { ActionFeedbackProvider, useActionFeedback } from "./actionFeedback.js";
+import { APP_VERSION } from "../appVersion.js";
 import "./styles.css";
 
 type AuthUser = {
@@ -32,6 +34,7 @@ type AuthUser = {
 
 type ExportFilters = {
   queryVersionId: string;
+  format: "csv" | "ndjson";
   from?: string;
   to?: string;
   jsonFilters: Array<{ field: string; value: string }>;
@@ -161,14 +164,11 @@ function AccountFooter({
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const flash = useActionFeedback();
   const iconProps = { size: 18, strokeWidth: 1.5 } as const;
 
   function togglePasswordPanel() {
-    setError(null);
-    setMessage(null);
+    flash.clear();
     if (collapsed) {
       onToggleCollapsed();
       setPasswordOpen(true);
@@ -179,13 +179,11 @@ function AccountFooter({
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    setMessage(null);
     if (newPassword !== confirmPassword) {
-      setError("New passwords do not match.");
+      flash.err("New passwords do not match.");
       return;
     }
-    setSubmitting(true);
+    flash.busy("Updating password…", "password");
     try {
       await fetchJson("/api/auth/password", {
         method: "POST",
@@ -198,18 +196,16 @@ function AccountFooter({
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setMessage("Password updated.");
+      flash.ok("Password updated.");
     } catch (caught) {
       const body = (caught as { body?: { error?: string; details?: string[] } }).body;
       if (body?.error === "invalid_credentials") {
-        setError("Current password is wrong.");
+        flash.err("Current password is wrong.");
       } else if (body?.details?.length) {
-        setError(body.details.join(" "));
+        flash.err(body.details.join(" "));
       } else {
-        setError("Could not change password.");
+        flash.err("Could not change password.");
       }
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -249,19 +245,16 @@ function AccountFooter({
               required
             />
           </label>
-          {error ? <p className="error">{error}</p> : null}
-          {message ? <p className="muted">{message}</p> : null}
           <div className="row-actions-tight">
-            <button type="submit" disabled={submitting}>
-              Save
+            <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("password")}>
+              {flash.isBusy("password") ? "Saving…" : "Save"}
             </button>
             <button
               type="button"
               className="static"
               onClick={() => {
                 setPasswordOpen(false);
-                setError(null);
-                setMessage(null);
+                flash.clear();
               }}
             >
               Cancel
@@ -400,9 +393,11 @@ function App() {
   return (
     <div className={`app-frame${collapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar">
-        <div className="app-brand">
+        <div className="app-brand" title={`Archive · LogScale v${APP_VERSION}`}>
           <h1>Archive</h1>
-          <p className="muted caption">LogScale</p>
+          <p className="muted caption">
+            LogScale <span className="app-version">v{APP_VERSION}</span>
+          </p>
         </div>
         <nav className="app-nav">
           <a
@@ -561,6 +556,8 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ActionFeedbackProvider>
+      <App />
+    </ActionFeedbackProvider>
   </StrictMode>,
 );

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useActionFeedback } from "../client/actionFeedback.js";
 
 type AuthUser = {
   id: string;
@@ -47,13 +48,12 @@ async function api<T>(
 }
 
 export function UsersPage({ user, csrfToken }: UsersPageProps) {
+  const flash = useActionFeedback();
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [policy, setPolicy] = useState<PasswordPolicy | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"admin" | "viewer">("viewer");
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
   const [resetUserId, setResetUserId] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState("");
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
@@ -68,13 +68,12 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
   }
 
   useEffect(() => {
-    void reload().catch(() => setError("Failed to load users."));
+    void reload().catch(() => flash.err("Failed to load users."));
   }, [csrfToken]);
 
   async function onCreateUser(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    setMessage(null);
+    flash.busy("Creating user…", "create");
     try {
       await api(csrfToken, "/api/admin/users", {
         method: "POST",
@@ -82,30 +81,29 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
       });
       setUsername("");
       setPassword("");
-      setMessage("User created.");
+      flash.ok("User created.");
       await reload();
     } catch (caught) {
       const body = (caught as { body?: { details?: string[] } }).body;
       if (body?.details?.length) {
-        setError(body.details.join(" "));
+        flash.err(body.details.join(" "));
       } else {
-        setError("Could not create user.");
+        flash.err("Could not create user.");
       }
     }
   }
 
   async function onRevokeSessions(userId: string) {
-    setError(null);
-    setMessage(null);
+    flash.busy("Revoking sessions…", `revoke:${userId}`);
     try {
       const result = await api<{ revoked: number }>(
         csrfToken,
         `/api/admin/users/${userId}/revoke-sessions`,
         { method: "POST", body: "{}" },
       );
-      setMessage(`Revoked ${result.revoked} session(s).`);
+      flash.ok(`Revoked ${result.revoked} session(s).`);
     } catch {
-      setError("Could not revoke sessions.");
+      flash.err("Could not revoke sessions.");
     }
   }
 
@@ -114,9 +112,8 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
     if (!resetUserId) {
       return;
     }
-    setError(null);
-    setMessage(null);
     setGeneratedPassword(null);
+    flash.busy("Resetting password…", "set-password");
     try {
       await api(csrfToken, `/api/admin/users/${resetUserId}/password`, {
         method: "POST",
@@ -124,21 +121,20 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
       });
       setResetPassword("");
       setResetUserId(null);
-      setMessage("Password reset. All sessions for that user were revoked.");
+      flash.ok("Password reset. All sessions for that user were revoked.");
     } catch (caught) {
       const body = (caught as { body?: { details?: string[] } }).body;
       if (body?.details?.length) {
-        setError(body.details.join(" "));
+        flash.err(body.details.join(" "));
       } else {
-        setError("Could not reset password.");
+        flash.err("Could not reset password.");
       }
     }
   }
 
   async function onGeneratePassword(userId: string) {
-    setError(null);
-    setMessage(null);
     setGeneratedPassword(null);
+    flash.busy("Generating password…", `generate:${userId}`);
     try {
       const result = await api<{ ok: true; generatedPassword: string }>(
         csrfToken,
@@ -147,9 +143,9 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
       );
       setGeneratedPassword(result.generatedPassword);
       setResetUserId(userId);
-      setMessage("Temporary password generated. Copy it now — it will not be shown again.");
+      flash.ok("Temporary password generated. Copy it now — it will not be shown again.");
     } catch {
-      setError("Could not generate password.");
+      flash.err("Could not generate password.");
     }
   }
 
@@ -158,17 +154,16 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
     if (!policy) {
       return;
     }
-    setError(null);
-    setMessage(null);
+    flash.busy("Saving policy…", "policy");
     try {
       const result = await api<{ policy: PasswordPolicy }>(csrfToken, "/api/admin/password-policy", {
         method: "PUT",
         body: JSON.stringify(policy),
       });
       setPolicy(result.policy);
-      setMessage("Password policy updated.");
+      flash.ok("Password policy updated.");
     } catch {
-      setError("Could not update password policy.");
+      flash.err("Could not update password policy.");
     }
   }
 
@@ -179,8 +174,6 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
         <p className="muted">Signed in as {user.username}</p>
       </header>
 
-      {error ? <p className="error">{error}</p> : null}
-      {message ? <p className="muted">{message}</p> : null}
       {generatedPassword ? (
         <p className="mono generated-password panel">
           Generated password: {generatedPassword}
@@ -204,11 +197,17 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
                 <td>{entry.role}</td>
                 <td>
                   <div className="row-actions-tight">
-                    <button type="button" onClick={() => void onRevokeSessions(entry.id)}>
-                      Revoke sessions
+                    <button
+                      type="button"
+                      disabled={flash.anyBusy}
+                      aria-busy={flash.isBusy(`revoke:${entry.id}`)}
+                      onClick={() => void onRevokeSessions(entry.id)}
+                    >
+                      {flash.isBusy(`revoke:${entry.id}`) ? "Revoking…" : "Revoke sessions"}
                     </button>
                     <button
                       type="button"
+                      disabled={flash.anyBusy}
                       onClick={() => {
                         setResetUserId(entry.id);
                         setResetPassword("");
@@ -217,8 +216,13 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
                     >
                       Set password
                     </button>
-                    <button type="button" onClick={() => void onGeneratePassword(entry.id)}>
-                      Generate
+                    <button
+                      type="button"
+                      disabled={flash.anyBusy}
+                      aria-busy={flash.isBusy(`generate:${entry.id}`)}
+                      onClick={() => void onGeneratePassword(entry.id)}
+                    >
+                      {flash.isBusy(`generate:${entry.id}`) ? "Generating…" : "Generate"}
                     </button>
                   </div>
                   {resetUserId === entry.id && !generatedPassword ? (
@@ -234,8 +238,14 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
                         />
                       </label>
                       <div className="row-actions-tight">
-                        <button type="submit">Save password</button>
-                        <button type="button" onClick={() => setResetUserId(null)}>
+                        <button
+                          type="submit"
+                          disabled={flash.anyBusy}
+                          aria-busy={flash.isBusy("set-password")}
+                        >
+                          {flash.isBusy("set-password") ? "Saving…" : "Save password"}
+                        </button>
+                        <button type="button" onClick={() => setResetUserId(null)} disabled={flash.anyBusy}>
                           Cancel
                         </button>
                       </div>
@@ -270,7 +280,9 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
             <option value="admin">Admin</option>
           </select>
         </label>
-        <button type="submit">Create user</button>
+        <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("create")}>
+          {flash.isBusy("create") ? "Creating…" : "Create user"}
+        </button>
       </form>
 
       {policy ? (
@@ -327,7 +339,9 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
             />
             Require symbol
           </label>
-          <button type="submit">Save policy</button>
+          <button type="submit" disabled={flash.anyBusy} aria-busy={flash.isBusy("policy")}>
+            {flash.isBusy("policy") ? "Saving…" : "Save policy"}
+          </button>
         </form>
       ) : null}
     </div>

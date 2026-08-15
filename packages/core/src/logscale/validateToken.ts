@@ -23,9 +23,10 @@ export async function validateConnection(
   let tokenExpiresAt: string | undefined;
 
   try {
+    // ponytail: /api/v1/status is the documented health endpoint; /version 404s or returns HTML behind SPA prefixes
     const versionResponse = await timedFetch(
       fetchImpl,
-      `${baseUrl}/api/v1/version`,
+      `${baseUrl}/api/v1/status`,
       input.token,
       timeoutMs,
     );
@@ -35,6 +36,16 @@ export async function validateConnection(
         repositoryAccessible: false,
         permissionWarnings,
         error: await errorFromResponse(versionResponse, input.token),
+      };
+    }
+    const contentType = versionResponse.headers.get("content-type") ?? "";
+    if (!contentType.includes("json")) {
+      return {
+        ok: false,
+        repositoryAccessible: false,
+        permissionWarnings,
+        error:
+          "Endpoint returned HTML instead of JSON — use the LogScale API base URL without /humio or /logscale",
       };
     }
     const versionBody = (await versionResponse.json()) as { version?: string; build?: string };
@@ -62,6 +73,44 @@ export async function validateConnection(
         repositoryAccessible: false,
         permissionWarnings,
         error: await errorFromResponse(repoResponse, input.token),
+      };
+    }
+
+    const repoContentType = repoResponse.headers.get("content-type") ?? "";
+    if (!repoContentType.includes("json")) {
+      return {
+        ok: false,
+        serverVersion,
+        repositoryAccessible: false,
+        permissionWarnings,
+        error: "Repository response was not JSON",
+      };
+    }
+
+    let repoBody: { name?: string };
+    try {
+      repoBody = (await repoResponse.json()) as { name?: string };
+    } catch {
+      return {
+        ok: false,
+        serverVersion,
+        repositoryAccessible: false,
+        permissionWarnings,
+        error: "Repository response was not valid JSON",
+      };
+    }
+    const returnedName = repoBody.name?.trim();
+    const expectedName = input.repository.trim();
+    // ponytail: require body.name === configured repo so a 200 for wrong/proxy path cannot pass
+    if (!returnedName || returnedName !== expectedName) {
+      return {
+        ok: false,
+        serverVersion,
+        repositoryAccessible: false,
+        permissionWarnings,
+        error: returnedName
+          ? `Repository name mismatch: expected "${expectedName}", got "${returnedName}"`
+          : "Repository response did not include a matching name",
       };
     }
     repositoryAccessible = true;

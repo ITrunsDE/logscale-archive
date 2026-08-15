@@ -58,15 +58,31 @@ function toWindow(row: BackfillRow): BackfillWindow {
 }
 
 async function assertEventQueryVersion(db: Database, queryVersionId: string): Promise<void> {
-  const result = await db.query<{ mode: string }>(
-    `SELECT mode FROM query_versions WHERE id = $1`,
+  const result = await db.query<{ mode: string; active: boolean }>(
+    `SELECT mode, active FROM query_versions WHERE id = $1`,
     [queryVersionId],
   );
   if (!result.rows[0]) {
     throw new Error("not_found");
   }
+  if (!result.rows[0].active) {
+    throw new Error("inactive_query");
+  }
   if (result.rows[0].mode !== "event") {
     throw new Error("invalid_mode");
+  }
+}
+
+async function assertActiveQueryVersion(db: Database, queryVersionId: string): Promise<void> {
+  const result = await db.query<{ active: boolean }>(
+    `SELECT active FROM query_versions WHERE id = $1`,
+    [queryVersionId],
+  );
+  if (!result.rows[0]) {
+    throw new Error("not_found");
+  }
+  if (!result.rows[0].active) {
+    throw new Error("inactive_query");
   }
 }
 
@@ -75,12 +91,25 @@ export async function createBackfill(
   queryVersionId: string,
   start: string,
   end: string,
-): Promise<void> {
+): Promise<{ created: number; requeued: number }> {
   await assertEventQueryVersion(db, queryVersionId);
   const windows = utcDayWindows(start, end);
+  let created = 0;
+  let requeued = 0;
 
   for (const window of windows) {
-    await db.query(
+    const reset = await db.query(
+      `UPDATE backfill_windows
+       SET status = 'pending', updated_at = now()
+       WHERE query_version_id = $1
+         AND window_start = $2
+         AND window_end = $3
+         AND status IN ('complete', 'failed', 'paused')`,
+      [queryVersionId, window.start, window.end],
+    );
+    requeued += reset.rowCount ?? 0;
+
+    const inserted = await db.query(
       `INSERT INTO backfill_windows (query_version_id, window_start, window_end, status)
        SELECT $1, $2, $3, 'pending'
        WHERE NOT EXISTS (
@@ -88,11 +117,13 @@ export async function createBackfill(
          WHERE query_version_id = $1
            AND window_start = $2
            AND window_end = $3
-           AND status <> 'failed'
        )`,
       [queryVersionId, window.start, window.end],
     );
+    created += inserted.rowCount ?? 0;
   }
+
+  return { created, requeued };
 }
 
 export async function pauseBackfill(db: Database, queryVersionId: string): Promise<number> {
@@ -106,6 +137,7 @@ export async function pauseBackfill(db: Database, queryVersionId: string): Promi
 }
 
 export async function resumeBackfill(db: Database, queryVersionId: string): Promise<number> {
+  await assertActiveQueryVersion(db, queryVersionId);
   const result = await db.query(
     `UPDATE backfill_windows
      SET status = 'pending', updated_at = now()

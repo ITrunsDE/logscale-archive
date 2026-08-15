@@ -5,7 +5,10 @@ import {
   activateQueryVersion,
   createQueryDraft,
   deactivateQueryVersion,
+  deleteQueryVersion,
+  listQueryNames,
   listQueryVersions,
+  renameQuery,
   testQueryVersion,
   type QueryMode,
 } from "@archive/core";
@@ -24,12 +27,61 @@ export async function registerQueryRoutes(
     { preHandler: requireRole("admin") },
     async (request, reply) => {
       const { connectionId, name } = request.query as { connectionId?: string; name?: string };
-      if (!connectionId || !name) {
+      if (!connectionId) {
         reply.code(400).send({ error: "missing_fields" });
+        return;
+      }
+      if (!name) {
+        reply.send({ names: await listQueryNames(db, connectionId) });
         return;
       }
       const versions = await listQueryVersions(db, connectionId, name);
       reply.send({ versions });
+    },
+  );
+
+  app.patch(
+    "/api/admin/queries/rename",
+    { preHandler: requireRole("admin") },
+    async (request, reply) => {
+      requireCsrf(request, reply);
+      if (reply.sent) {
+        return;
+      }
+
+      const body = request.body as {
+        connectionId?: string;
+        oldName?: string;
+        newName?: string;
+      };
+      if (!body.connectionId || !body.oldName?.trim() || !body.newName?.trim()) {
+        reply.code(400).send({ error: "missing_fields" });
+        return;
+      }
+
+      try {
+        await renameQuery(db, body.connectionId, body.oldName.trim(), body.newName.trim());
+        await recordAuditAction(db, request, "query.rename", {
+          connectionId: body.connectionId,
+          oldName: body.oldName.trim(),
+          newName: body.newName.trim(),
+        });
+        reply.send({ renamed: true, name: body.newName.trim() });
+      } catch (error) {
+        if (error instanceof Error && error.message === "not_found") {
+          reply.code(404).send({ error: "not_found" });
+          return;
+        }
+        if (error instanceof Error && error.message === "name_taken") {
+          reply.code(409).send({ error: "name_taken" });
+          return;
+        }
+        if (error instanceof Error && error.message === "invalid_name") {
+          reply.code(400).send({ error: "invalid_name" });
+          return;
+        }
+        throw error;
+      }
     },
   );
 
@@ -169,6 +221,34 @@ export async function registerQueryRoutes(
       } catch (error) {
         if (error instanceof Error && error.message === "not_found") {
           reply.code(404).send({ error: "not_found" });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.delete(
+    "/api/admin/query-versions/:queryVersionId",
+    { preHandler: requireRole("admin") },
+    async (request, reply) => {
+      requireCsrf(request, reply);
+      if (reply.sent) {
+        return;
+      }
+
+      const { queryVersionId } = request.params as { queryVersionId: string };
+      try {
+        await deleteQueryVersion(db, queryVersionId);
+        await recordAuditAction(db, request, "query.version.delete", { queryVersionId });
+        reply.send({ deleted: true });
+      } catch (error) {
+        if (error instanceof Error && error.message === "not_found") {
+          reply.code(404).send({ error: "not_found" });
+          return;
+        }
+        if (error instanceof Error && error.message === "active_version") {
+          reply.code(409).send({ error: "active_version" });
           return;
         }
         throw error;

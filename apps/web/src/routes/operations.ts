@@ -3,16 +3,19 @@ import type { Database } from "@archive/core";
 import {
   checkDatabaseHealth,
   checkWorkerHealth,
+  clearFailedBackups,
   createBackup,
   getJobStats,
   getMaintenanceState,
-  listAppliedMigrations,
+  isListableQueryRunStatus,
   listBackupRuns,
+  listQueryRunsByStatus,
 } from "@archive/core";
 import { canAcquireStorage } from "@archive/worker/storageGuard";
 import { runRestoreJob } from "@archive/worker/restoreJob";
 import { requireCsrf, requireRole } from "../auth/guards.js";
 import { recordAuditAction } from "./audit.js";
+import { APP_VERSION } from "../appVersion.js";
 
 function clientIp(request: FastifyRequest): string {
   const forwarded = request.headers["x-forwarded-for"];
@@ -30,8 +33,7 @@ export async function registerOperationsRoutes(
     "/api/admin/operations/status",
     { preHandler: requireRole("admin") },
     async () => {
-      const [migrations, jobs, backups, dbOk] = await Promise.all([
-        listAppliedMigrations(db),
+      const [jobs, backups, dbOk] = await Promise.all([
         getJobStats(db),
         listBackupRuns(db),
         checkDatabaseHealth(db),
@@ -41,7 +43,7 @@ export async function registerOperationsRoutes(
         storage: canAcquireStorage(),
         worker: checkWorkerHealth(),
         database: { ok: dbOk },
-        migrations,
+        appVersion: APP_VERSION,
         jobs,
         backups,
       };
@@ -52,6 +54,19 @@ export async function registerOperationsRoutes(
     "/api/admin/operations/backups",
     { preHandler: requireRole("admin") },
     async () => ({ backups: await listBackupRuns(db) }),
+  );
+
+  app.get(
+    "/api/admin/operations/query-runs",
+    { preHandler: requireRole("admin") },
+    async (request, reply) => {
+      const { status } = request.query as { status?: string };
+      if (!status || !isListableQueryRunStatus(status)) {
+        reply.code(400).send({ error: "unsupported_status" });
+        return;
+      }
+      reply.send({ status, runs: await listQueryRunsByStatus(db, status) });
+    },
   );
 
   app.post(
@@ -73,6 +88,21 @@ export async function registerOperationsRoutes(
           message: error instanceof Error ? error.message : "backup failed",
         });
       }
+    },
+  );
+
+  app.post(
+    "/api/admin/operations/backups/clear-failed",
+    { preHandler: requireRole("admin") },
+    async (request, reply) => {
+      requireCsrf(request, reply);
+      if (reply.sent) {
+        return;
+      }
+
+      const result = await clearFailedBackups(db);
+      await recordAuditAction(db, request, "backup.clear_failed", result);
+      reply.send(result);
     },
   );
 

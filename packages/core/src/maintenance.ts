@@ -17,6 +17,7 @@ export type BackupRun = {
   filePath: string | null;
   checksum: string | null;
   errorMessage: string | null;
+  sizeBytes: number | null;
   createdAt: string;
   finishedAt: string | null;
 };
@@ -63,6 +64,17 @@ function maintenancePath(env: NodeJS.ProcessEnv): string {
   return join(envValue(env, "DATA_PATH"), ".maintenance.json");
 }
 
+function fileSizeBytes(path: string | null): number | null {
+  if (!path || !existsSync(path)) {
+    return null;
+  }
+  try {
+    return statSync(path).size;
+  } catch {
+    return null;
+  }
+}
+
 function mapBackupRow(row: BackupRow): BackupRun {
   return {
     id: row.id,
@@ -70,6 +82,7 @@ function mapBackupRow(row: BackupRow): BackupRun {
     filePath: row.file_path,
     checksum: row.checksum,
     errorMessage: row.error_message,
+    sizeBytes: fileSizeBytes(row.file_path),
     createdAt: row.created_at.toISOString(),
     finishedAt: row.finished_at?.toISOString() ?? null,
   };
@@ -149,6 +162,28 @@ export async function listBackupRuns(db: Database, limit = 20): Promise<BackupRu
     [limit],
   );
   return result.rows.map(mapBackupRow);
+}
+
+export async function clearFailedBackups(
+  db: Database,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ deleted: number }> {
+  const backupRoot = env.BACKUP_PATH;
+  const failed = await db.query<{ id: string; file_path: string | null }>(
+    `SELECT id, file_path FROM backup_runs WHERE status = 'failed'`,
+  );
+  if (backupRoot) {
+    for (const row of failed.rows) {
+      const path = row.file_path ?? join(backupRoot, `${row.id}.sql`);
+      try {
+        unlinkSync(path);
+      } catch {
+        // ponytail: missing dump files are fine when clearing failed rows
+      }
+    }
+  }
+  const deleted = await db.query(`DELETE FROM backup_runs WHERE status = 'failed'`);
+  return { deleted: deleted.rowCount ?? failed.rows.length };
 }
 
 export async function getBackupRun(db: Database, id: string): Promise<BackupRun | null> {

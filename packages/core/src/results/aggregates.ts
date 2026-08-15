@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { writeAuditEntry } from "../audit/writeAuditEntry.js";
+import { jsonForPostgres } from "../db/jsonForPostgres.js";
 import type { Database } from "../db/repositories.js";
 import type { QueryRunKind } from "../jobs/leases.js";
 import { LogScaleClient } from "../logscale/client.js";
@@ -80,7 +81,7 @@ function sortKeys(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function stablePayloadJson(payload: unknown[]): string {
-  return JSON.stringify(payload);
+  return jsonForPostgres(payload);
 }
 
 function createLogScaleClient(
@@ -152,7 +153,7 @@ export async function storeAggregateSnapshot(
       input.repository,
       input.windowStart,
       input.windowEnd,
-      JSON.stringify(dimensions),
+      jsonForPostgres(dimensions),
       hash,
       revision,
       payloadJson,
@@ -171,13 +172,18 @@ async function markRunComplete(
   window: AggregateWindow,
   revision: number,
 ): Promise<void> {
+  let completed = false;
   await db.withTransaction(async (client) => {
-    await client.query(
+    const updated = await client.query(
       `UPDATE query_runs
        SET status = 'complete', failure_reason = NULL, result_count = $2, finished_at = now()
-       WHERE id = $1`,
+       WHERE id = $1 AND status = 'running'`,
       [runId, revision],
     );
+    if ((updated.rowCount ?? 0) === 0) {
+      return;
+    }
+    completed = true;
 
     if (kind === "scheduled") {
       await client.query(
@@ -188,6 +194,10 @@ async function markRunComplete(
       );
     }
   });
+
+  if (!completed) {
+    return;
+  }
 
   await writeAuditEntry(db, {
     action: "aggregate_archive.complete",
@@ -212,12 +222,15 @@ async function markRunFailed(
   retryable: boolean,
 ): Promise<void> {
   const status = retryable ? "pending" : "failed";
-  await db.query(
+  const updated = await db.query(
     `UPDATE query_runs
      SET status = $2, failure_reason = $3, finished_at = CASE WHEN $4 THEN NULL ELSE now() END
-     WHERE id = $1`,
+     WHERE id = $1 AND status IN ('pending', 'running')`,
     [runId, status, message.slice(0, 500), retryable],
   );
+  if ((updated.rowCount ?? 0) === 0) {
+    return;
+  }
 
   await writeAuditEntry(db, {
     action: retryable ? "aggregate_archive.retry" : "aggregate_archive.failed",

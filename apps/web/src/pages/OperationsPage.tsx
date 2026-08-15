@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useActionFeedback } from "../client/actionFeedback.js";
 
 type AuthUser = {
   id: string;
@@ -11,8 +12,23 @@ type BackupRun = {
   status: string;
   filePath: string | null;
   checksum: string | null;
+  errorMessage: string | null;
+  sizeBytes: number | null;
   createdAt: string;
   finishedAt: string | null;
+};
+
+type QueryRunRow = {
+  id: string;
+  queryName: string;
+  versionNumber: number;
+  kind: string;
+  status: string;
+  failureReason: string | null;
+  windowStart: string;
+  windowEnd: string;
+  finishedAt: string | null;
+  createdAt: string;
 };
 
 type OperationsStatus = {
@@ -23,7 +39,7 @@ type OperationsStatus = {
   };
   worker: { ok: boolean; lastSeen: string | null };
   database: { ok: boolean };
-  migrations: string[];
+  appVersion: string;
   jobs: {
     queryRuns: Record<string, number>;
     exports: Record<string, number>;
@@ -37,11 +53,7 @@ type OperationsPageProps = {
   csrfToken: string;
 };
 
-async function api<T>(
-  csrfToken: string,
-  url: string,
-  init?: RequestInit,
-): Promise<T> {
+async function api<T>(csrfToken: string, url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: "include",
     headers: {
@@ -62,12 +74,106 @@ function healthStamp(ok: boolean, label: string): string {
   return ok ? `${label}: ok` : `${label}: down`;
 }
 
+function statusStampClass(status: string): string {
+  if (status === "complete") {
+    return "stamp stamp-complete";
+  }
+  if (status === "failed") {
+    return "stamp stamp-failed";
+  }
+  if (status === "running" || status === "pending") {
+    return "stamp stamp-held";
+  }
+  return "stamp";
+}
+
+function shortenError(message: string | null): string {
+  if (!message) {
+    return "—";
+  }
+  const oneLine = message.replace(/\s+/g, " ").trim();
+  if (/version mismatch/i.test(oneLine)) {
+    return "pg_dump version mismatch (server newer than client)";
+  }
+  return oneLine.length > 96 ? `${oneLine.slice(0, 93)}…` : oneLine;
+}
+
+function formatBytes(bytes: number | null): string {
+  if (bytes == null) {
+    return "—";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
+
+function JobStatCard({
+  title,
+  counts,
+  onStatusClick,
+  selectedStatus,
+}: {
+  title: string;
+  counts: Record<string, number>;
+  onStatusClick?: (status: string) => void;
+  selectedStatus?: string | null;
+}) {
+  const entries = Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return (
+      <article className="ops-stat-card">
+        <h3>{title}</h3>
+        <p className="muted">No jobs yet.</p>
+      </article>
+    );
+  }
+  return (
+    <article className="ops-stat-card">
+      <h3>{title}</h3>
+      {entries.map(([status, count]) => {
+        const clickable = Boolean(onStatusClick) && count > 0;
+        const open = selectedStatus === status;
+        const alert = status === "failed" && count > 0;
+        const className = `ops-stat-row${alert ? " alert" : ""}${clickable ? " ops-stat-link" : ""}${open ? " open" : ""}`;
+        if (clickable) {
+          return (
+            <button
+              key={status}
+              type="button"
+              className={className}
+              onClick={() => onStatusClick?.(status)}
+            >
+              <span>{status}</span>
+              <span className="mono">{count.toLocaleString()}</span>
+            </button>
+          );
+        }
+        return (
+          <div key={status} className={`ops-stat-row${alert ? " alert" : ""}`}>
+            <span>{status}</span>
+            <span className="mono">{count.toLocaleString()}</span>
+          </div>
+        );
+      })}
+    </article>
+  );
+}
+
 export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
+  const flash = useActionFeedback();
   const [status, setStatus] = useState<OperationsStatus | null>(null);
   const [selectedBackupId, setSelectedBackupId] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [runsStatus, setRunsStatus] = useState<string | null>(null);
+  const [runs, setRuns] = useState<QueryRunRow[] | null>(null);
 
   async function reload() {
     const result = await api<{ backups: BackupRun[] } & OperationsStatus>(
@@ -81,25 +187,89 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
   }
 
   useEffect(() => {
-    void reload().catch(() => setError("Failed to load operations status."));
+    void reload().catch(() => flash.err("Failed to load operations status."));
   }, [csrfToken]);
 
+  // Keep job counts fresh while page is open.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void reload().catch(() => {});
+      if (!runsStatus) {
+        return;
+      }
+      void api<{ runs: QueryRunRow[] }>(
+        csrfToken,
+        `/api/admin/operations/query-runs?status=${encodeURIComponent(runsStatus)}`,
+      )
+        .then((result) => setRuns(result.runs))
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [csrfToken, runsStatus]);
+
+  async function loadRuns(statusFilter: string) {
+    flash.busy(`Loading ${statusFilter} runs…`, "query-runs");
+    try {
+      const result = await api<{ runs: QueryRunRow[] }>(
+        csrfToken,
+        `/api/admin/operations/query-runs?status=${encodeURIComponent(statusFilter)}`,
+      );
+      setRuns(result.runs);
+      setRunsStatus(statusFilter);
+      flash.clear();
+    } catch {
+      flash.err(`Could not load ${statusFilter} query runs.`);
+    }
+  }
+
+  function onToggleRuns(statusFilter: string) {
+    if (runsStatus === statusFilter) {
+      setRunsStatus(null);
+      setRuns(null);
+      return;
+    }
+    void loadRuns(statusFilter);
+  }
+
   async function onCreateBackup() {
-    setError(null);
-    setMessage(null);
+    flash.busy("Starting backup…", "backup");
     try {
       await api(csrfToken, "/api/admin/operations/backups", { method: "POST", body: "{}" });
-      setMessage("Backup started.");
+      flash.ok("Backup started.");
+      await reload();
+    } catch (caught) {
+      const err = caught as { body?: { message?: string } };
+      flash.err(err.body?.message ?? "Could not create backup.");
+      await reload();
+    }
+  }
+
+  async function onClearFailed() {
+    const failed = status?.jobs.backups.failed ?? 0;
+    if (failed <= 0) {
+      return;
+    }
+    const ok = window.confirm(`Delete ${failed.toLocaleString()} failed backup record(s)?`);
+    if (!ok) {
+      return;
+    }
+    flash.busy("Clearing failed backups…", "clear");
+    try {
+      const result = await api<{ deleted: number }>(
+        csrfToken,
+        "/api/admin/operations/backups/clear-failed",
+        { method: "POST", body: "{}" },
+      );
+      flash.ok(`Cleared ${result.deleted.toLocaleString()} failed backup(s).`);
       await reload();
     } catch {
-      setError("Could not create backup.");
+      flash.err("Could not clear failed backups.");
     }
   }
 
   async function onRestore(event: FormEvent) {
     event.preventDefault();
-    setError(null);
-    setMessage(null);
+    flash.busy("Restoring backup…", "restore");
     try {
       const result = await api<{ outcome: { safetyBackupId: string; integrityOk: boolean } }>(
         csrfToken,
@@ -110,19 +280,21 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
         },
       );
       setConfirmation("");
-      setMessage(
+      flash.ok(
         `Restore complete. Safety backup ${result.outcome.safetyBackupId.slice(0, 8)}… integrity ${result.outcome.integrityOk ? "ok" : "failed"}.`,
       );
       await reload();
     } catch (caught) {
       const err = caught as { body?: { error?: string } };
       if (err.body?.error === "confirmation_mismatch") {
-        setError("Instance name does not match.");
+        flash.err("Instance name does not match.");
         return;
       }
-      setError("Restore failed.");
+      flash.err("Restore failed.");
     }
   }
+
+  const failedBackupCount = status?.jobs.backups.failed ?? 0;
 
   return (
     <div className="stack">
@@ -130,9 +302,6 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
         <h1>Operations</h1>
         <p className="muted">Signed in as {user.username}</p>
       </header>
-
-      {error ? <p className="error">{error}</p> : null}
-      {message ? <p className="muted">{message}</p> : null}
 
       {status ? (
         <>
@@ -170,35 +339,135 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
           </section>
 
           <section className="panel wide-panel stack">
-            <h2>Versions and jobs</h2>
-            <p className="muted">Migrations: {status.migrations.join(", ") || "none"}</p>
-            <p className="muted">
-              Query runs: {JSON.stringify(status.jobs.queryRuns)} · Exports:{" "}
-              {JSON.stringify(status.jobs.exports)} · Backups: {JSON.stringify(status.jobs.backups)}
-            </p>
+            <h2>Jobs</h2>
+            <div className="ops-stat-grid">
+              <JobStatCard
+                title="Query runs"
+                counts={status.jobs.queryRuns}
+                onStatusClick={onToggleRuns}
+                selectedStatus={runsStatus}
+              />
+              <JobStatCard title="Exports" counts={status.jobs.exports} />
+              <JobStatCard title="Backups" counts={status.jobs.backups} />
+            </div>
+            {runsStatus ? (
+              <div className="ops-failed-panel stack">
+                <div className="ops-toolbar">
+                  <h3>
+                    Query runs: <span className="mono">{runsStatus}</span>
+                  </h3>
+                  <button type="button" className="secondary" onClick={() => { setRunsStatus(null); setRuns(null); }}>
+                    Close
+                  </button>
+                </div>
+                {runs == null ? (
+                  <p className="muted">Loading…</p>
+                ) : runs.length === 0 ? (
+                  <p className="muted">No {runsStatus} runs.</p>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Query</th>
+                        <th>Kind</th>
+                        <th>Window</th>
+                        {runsStatus === "failed" ? <th>Error</th> : null}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((run) => (
+                        <tr key={run.id}>
+                          <td>{new Date(run.finishedAt ?? run.createdAt).toLocaleString()}</td>
+                          <td className="mono">
+                            {run.queryName} v{run.versionNumber}
+                          </td>
+                          <td>{run.kind}</td>
+                          <td className="mono">
+                            {new Date(run.windowStart).toLocaleString()} →{" "}
+                            {new Date(run.windowEnd).toLocaleString()}
+                          </td>
+                          {runsStatus === "failed" ? (
+                            <td>
+                              {run.failureReason ? (
+                                <span className="ops-error" title={run.failureReason}>
+                                  {shortenError(run.failureReason)}
+                                </span>
+                              ) : (
+                                <span className="muted">—</span>
+                              )}
+                            </td>
+                          ) : null}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ) : null}
           </section>
 
           <section className="panel wide-panel stack">
-            <h2>Backups</h2>
-            <button type="button" onClick={() => void onCreateBackup()}>
-              Create backup now
-            </button>
+            <div className="ops-toolbar">
+              <h2>Backups</h2>
+              <div className="row-actions">
+                <button
+                  type="button"
+                  disabled={flash.anyBusy}
+                  aria-busy={flash.isBusy("backup")}
+                  onClick={() => void onCreateBackup()}
+                >
+                  {flash.isBusy("backup") ? "Starting…" : "Create backup now"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={flash.anyBusy || failedBackupCount === 0}
+                  aria-busy={flash.isBusy("clear")}
+                  onClick={() => void onClearFailed()}
+                >
+                  {flash.isBusy("clear") ? "Clearing…" : "Clear failed"}
+                </button>
+              </div>
+            </div>
             <table>
               <thead>
                 <tr>
                   <th>Created</th>
                   <th>Status</th>
+                  <th>Size</th>
                   <th>Checksum</th>
+                  <th>Error</th>
                 </tr>
               </thead>
               <tbody>
-                {status.backups.map((backup) => (
-                  <tr key={backup.id}>
-                    <td>{new Date(backup.createdAt).toLocaleString()}</td>
-                    <td>{backup.status}</td>
-                    <td className="mono">{backup.checksum?.slice(0, 12) ?? "—"}</td>
+                {status.backups.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="muted">
+                      No backups yet.
+                    </td>
                   </tr>
-                ))}
+                ) : (
+                  status.backups.map((backup) => (
+                    <tr key={backup.id}>
+                      <td>{new Date(backup.createdAt).toLocaleString()}</td>
+                      <td>
+                        <span className={statusStampClass(backup.status)}>{backup.status}</span>
+                      </td>
+                      <td className="mono">{formatBytes(backup.sizeBytes)}</td>
+                      <td className="mono">{backup.checksum?.slice(0, 12) ?? "—"}</td>
+                      <td>
+                        {backup.errorMessage ? (
+                          <span className="ops-error" title={backup.errorMessage}>
+                            {shortenError(backup.errorMessage)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </section>
@@ -223,7 +492,8 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
                   .filter((backup) => backup.status === "complete")
                   .map((backup) => (
                     <option key={backup.id} value={backup.id}>
-                      {new Date(backup.createdAt).toLocaleString()} ({backup.id.slice(0, 8)})
+                      {new Date(backup.createdAt).toLocaleString()} · {formatBytes(backup.sizeBytes)} (
+                      {backup.id.slice(0, 8)})
                     </option>
                   ))}
               </select>
@@ -237,8 +507,13 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
                 autoComplete="off"
               />
             </label>
-            <button type="submit" className="restore-confirm">
-              Restore backup
+            <button
+              type="submit"
+              className="restore-confirm"
+              disabled={flash.anyBusy}
+              aria-busy={flash.isBusy("restore")}
+            >
+              {flash.isBusy("restore") ? "Restoring…" : "Restore backup"}
             </button>
           </form>
         </>

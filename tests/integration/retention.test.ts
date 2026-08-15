@@ -164,6 +164,28 @@ describe("retention integration", () => {
     await db.close();
   });
 
+  it("rejects backfill create and resume when query version is inactive", async () => {
+    const db = createDatabase(DATABASE_URL);
+    const queryVersionId = await seedQueryVersion(db, { active: true });
+
+    await createBackfill(db, queryVersionId, "2025-11-30T18:00:00.000Z", "2025-12-01T18:00:00.000Z");
+    await pauseBackfill(db, queryVersionId);
+
+    await db.query(`UPDATE query_versions SET active = false WHERE id = $1`, [queryVersionId]);
+
+    await expect(
+      createBackfill(db, queryVersionId, "2025-12-01T18:00:00.000Z", "2025-12-02T18:00:00.000Z"),
+    ).rejects.toThrow("inactive_query");
+
+    await expect(resumeBackfill(db, queryVersionId)).rejects.toThrow("inactive_query");
+
+    const status = await getBackfillStatus(db, queryVersionId);
+    expect(status.paused).toBeGreaterThan(0);
+    expect(status.pending).toBe(0);
+
+    await db.close();
+  });
+
   it("keeps held records when retention runs", async () => {
     const db = createDatabase(DATABASE_URL);
     const heldVersionId = await seedQueryVersion(db, { retentionDays: 7 });

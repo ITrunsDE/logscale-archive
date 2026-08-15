@@ -35,8 +35,9 @@ export class LogScaleClient {
       `/api/v1/repositories/${encodeURIComponent(this.repository)}/queryjobs`,
       {
         queryString: input.query,
-        start: input.start,
-        end: input.end,
+        // LogScale treats strings as relative durations; ISO must become epoch ms
+        start: toLogScaleTime(input.start),
+        end: toLogScaleTime(input.end),
         isLive: false,
       },
     );
@@ -58,10 +59,21 @@ export class LogScaleClient {
       jobId?: string;
       state?: string;
       status?: string;
+      done?: boolean;
+      cancelled?: boolean;
       error?: string;
       message?: string;
     };
-    const status = parseJobStatus(body.state ?? body.status) ?? "running";
+    // LogScale poll uses done/cancelled booleans; some mocks/older shapes use state/status
+    const status =
+      parseJobStatus(body.state ?? body.status) ??
+      (body.cancelled === true
+        ? "cancelled"
+        : body.done === true
+          ? "done"
+          : body.done === false
+            ? "running"
+            : "running");
     const error = body.error ?? body.message;
     const warnings = parseQueryJobWarnings(body);
     return {
@@ -171,6 +183,19 @@ function parseJobStatus(value: string | undefined): QueryJobStatus["status"] | u
     default:
       return undefined;
   }
+}
+
+/** Absolute ISO/epoch → ms number; relative strings (now, 1h) pass through. */
+function toLogScaleTime(value: string): number | string {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+  const ms = Date.parse(trimmed);
+  if (!Number.isNaN(ms)) {
+    return ms;
+  }
+  return trimmed;
 }
 
 async function readErrorMessage(response: Response, token: string): Promise<string> {

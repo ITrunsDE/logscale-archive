@@ -332,6 +332,53 @@ describe("completeness limits and aggregate snapshots", () => {
     await db.close();
   });
 
+  it("splits when LogScale returns more events than page limit with matching total (silent 200-cap)", async () => {
+    applyEnv();
+    const config = loadConfig(process.env);
+    const db = createDatabase(DATABASE_URL);
+    const { queryVersionId } = await seedActiveEventQuery(db);
+
+    const parentWindow = {
+      start: "2026-01-01T00:00:00.000Z",
+      end: "2026-01-01T02:00:00.000Z",
+    };
+    const runId = await insertPendingRun(db, queryVersionId, "backfill", parentWindow);
+
+    // One response larger than pageSize, done=true, total===fetched — LogScale ignores limit.
+    const oversized = [
+      event("c1"),
+      event("c2"),
+      event("c3"),
+      event("c4"),
+    ];
+    const fetchImpl = mockFetch([{ pages: [oversized] }]);
+
+    const outcome = await archiveEventWindow(
+      db,
+      {
+        encryptionKey: config.encryptionKey,
+        fetch: fetchImpl,
+        pageSize: PAGE_SIZE,
+        splitWindow,
+        minWindowDurationMs: 60_000,
+      },
+      runId,
+      parentWindow,
+    );
+    expect(outcome.split).toBe(true);
+
+    const run = await db.query<{ status: string; failure_reason: string | null }>(
+      `SELECT status, failure_reason FROM query_runs WHERE id = $1`,
+      [runId],
+    );
+    expect(run.rows[0]).toMatchObject({
+      status: "split",
+      failure_reason: expect.stringContaining("Result page full"),
+    });
+
+    await db.close();
+  });
+
   it("fails visibly at minimum window duration instead of discarding data", async () => {
     applyEnv();
     const config = loadConfig(process.env);

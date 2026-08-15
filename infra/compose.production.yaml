@@ -24,6 +24,7 @@ services:
       DATA_PATH: /data
       BACKUP_PATH: /data/backups
       EXPORT_PATH: /data/exports
+      WORKER_HEALTH_FILE: /data/archive-worker-health
     volumes:
       - app_data:/data
       - backup_data:/data/backups
@@ -37,6 +38,7 @@ services:
       DATA_PATH: /data
       BACKUP_PATH: /data/backups
       EXPORT_PATH: /data/exports
+      WORKER_HEALTH_FILE: /data/archive-worker-health
     volumes:
       - app_data:/data
       - backup_data:/data/backups
