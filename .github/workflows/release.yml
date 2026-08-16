@@ -51,9 +51,13 @@ jobs:
           docker save "${{ steps.meta.outputs.image }}" | sha256sum | tee archive-image.sha256
 
       - name: Generate SBOM
-        run: |
-          chmod +x scripts/generate-sbom.sh
-          scripts/generate-sbom.sh "${{ steps.meta.outputs.image }}" sbom.spdx.json
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.meta.outputs.image }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
