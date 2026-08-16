@@ -1,5 +1,5 @@
-import pg from "pg";
 import { expect, test } from "@playwright/test";
+import { openNav } from "./helpers";
 
 test.describe("auth browser flow", () => {
   test("bootstrap, login, and admin user management", async ({ page }) => {
@@ -12,8 +12,11 @@ test.describe("auth browser flow", () => {
     await page.getByLabel("Password").fill("bootstrap-password-14");
     await page.getByRole("button", { name: "Create admin" }).click();
 
-    await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
-    await expect(page.locator("#users").getByText("Signed in as admin")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Results", exact: true })).toBeVisible();
+
+    await openNav(page, "Users");
+    await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+    await expect(page.getByText("Signed in as admin")).toBeVisible();
 
     const createUser = page.getByRole("heading", { name: "Create user" }).locator("..");
     await createUser.getByLabel("Username").fill("viewer1");
@@ -22,6 +25,7 @@ test.describe("auth browser flow", () => {
     await createUser.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByRole("cell", { name: "viewer1" })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete" }).click();
 
     await expect(page.getByRole("cell", { name: "viewer1" })).not.toBeVisible();

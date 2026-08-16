@@ -1,31 +1,9 @@
 import { expect, test } from "@playwright/test";
-
-async function signIn(
-  page: import("@playwright/test").Page,
-  username: string,
-  password: string,
-): Promise<void> {
-  await page.goto("/");
-  await page.waitForLoadState("networkidle");
-
-  const createAdmin = page.getByRole("button", { name: "Create admin" });
-  if (await createAdmin.isVisible()) {
-    await page.getByLabel("Username").fill(username);
-    await page.getByLabel("Password").fill(password);
-    await createAdmin.click();
-    await expect(page.getByRole("heading", { name: "Results", exact: true })).toBeVisible();
-    return;
-  }
-
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Results", exact: true })).toBeVisible();
-}
+import { openNav, signIn } from "./helpers";
 
 async function ensureViewerExists(page: import("@playwright/test").Page): Promise<void> {
   await signIn(page, "admin", "bootstrap-password-14");
-  await page.getByRole("link", { name: "Users" }).click();
+  await openNav(page, "Users");
   if (await page.getByText("viewer-e2e").count()) {
     return;
   }
