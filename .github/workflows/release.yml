@@ -42,8 +42,10 @@ jobs:
         id: digest
         run: |
           DIGEST="${{ steps.build.outputs.digest }}"
+          PIN="ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Immutable reference: ghcr.io/${{ github.repository }}@${DIGEST}"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "Immutable reference: ${PIN}"
 
       - name: Generate checksum
         run: |
@@ -66,12 +68,14 @@ jobs:
             archive-image.sha256
             sbom.spdx.json
           body: |
-            ## Immutable image
+            ## Install image
+
+            Paste this line into `.env` (copy as-is). The registry path is lowercase on purpose — Docker rejects `ITrunsDE`:
 
             ```
-            ghcr.io/${{ github.repository }}@${{ steps.digest.outputs.digest }}
+            ARCHIVE_IMAGE=${{ steps.digest.outputs.pin }}
             ```
 
-            Pin deployments to this digest. Checksum and SBOM are attached.
+            Then follow [docs/installation.md](https://github.com/ITrunsDE/logscale-archive/blob/main/docs/installation.md).
 
-            Image signing with cosign can be enabled by adding `COSIGN_EXPERIMENTAL=1` and repository secrets for keyless or key-based signing in a follow-up workflow step.
+            Checksum (`archive-image.sha256`) and SBOM (`sbom.spdx.json`) are attached.

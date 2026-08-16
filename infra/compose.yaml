@@ -43,6 +43,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   worker:
     image: ${ARCHIVE_IMAGE:-archive:local}
@@ -59,11 +60,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      web:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "apps/worker/dist/health.js"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
     volumes:
       - exports_data:/data/exports
       - app_data:/data

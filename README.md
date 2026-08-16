@@ -56,7 +56,7 @@ export ENCRYPTION_KEY='…64 hex chars…'
 export SESSION_SECRET='…'
 export RECOVERY_SECRET='…'
 export INSTANCE_NAME='archive-prod-1'
-export ARCHIVE_IMAGE='ghcr.io/ITrunsDE/logscale-archive@sha256:…'
+export ARCHIVE_IMAGE='ghcr.io/itrunsde/logscale-archive@sha256:…'
 docker compose -f infra/compose.yaml -f infra/compose.production.yaml -f infra/compose.external-postgres.yaml pull web worker
 docker compose -f infra/compose.yaml -f infra/compose.production.yaml -f infra/compose.external-postgres.yaml up -d --no-build web worker
 ```
