@@ -36,11 +36,16 @@ cp .env.example .env
 
 Compose files live in `infra/`. Docker Compose therefore does not load this repo-root `.env` unless every command includes `--env-file .env`.
 
-Generate three random values (do not keep the example secrets):
+Generate secrets (do not keep the example values). `ENCRYPTION_KEY` must be **hex**, not the base64 output:
 
 ```bash
+# ENCRYPTION_KEY — exactly 64 hex characters
 openssl rand -hex 32
+
+# SESSION_SECRET
 openssl rand -base64 32
+
+# RECOVERY_SECRET
 openssl rand -base64 32
 ```
 
@@ -49,7 +54,7 @@ Open `.env` and set:
 | Variable | What to put |
 | --- | --- |
 | `POSTGRES_PASSWORD` | A strong password of your own |
-| `ENCRYPTION_KEY` | Output of `openssl rand -hex 32` (exactly 64 hex characters) |
+| `ENCRYPTION_KEY` | First command only (`openssl rand -hex 32`). Must be 64 characters `0-9`/`a-f`. Base64 from the other commands will fail at start. |
 | `SESSION_SECRET` | Second random output, at least 32 characters |
 | `RECOVERY_SECRET` | Third random output |
 | `INSTANCE_NAME` | Short name, for example `archive-prod-1` (required later to confirm a restore) |
@@ -103,6 +108,8 @@ docker compose --env-file .env \
 ```
 
 Migrations run automatically on web startup.
+
+Containers are named `logscale-archive-web-1`, `logscale-archive-worker-1`, and `logscale-archive-postgres-1`.
 
 ## Step 6 — Check that it is up
 
