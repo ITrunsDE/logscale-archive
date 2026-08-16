@@ -461,6 +461,52 @@ describe("auth integration", () => {
     await app.close();
   });
 
+  it("deletes non-admin users but protects the admin account", async () => {
+    applyEnv({ SECURE_COOKIES: "false" });
+    const { app } = await buildServer();
+    await app.ready();
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "admin", password: "changed-password-20" },
+    });
+    const cookie = parseSetCookie(login.headers["set-cookie"])!;
+    const csrf = login.json().csrfToken as string;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/admin/users",
+      headers: { cookie, "x-csrf-token": csrf },
+      payload: { username: "delete-target", password: "viewer-password-14", role: "viewer" },
+    });
+    const userId = created.json().user.id as string;
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/admin/users/${userId}`,
+      headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/admin/users",
+      headers: { cookie },
+    });
+    expect(listed.json().users).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: userId })]));
+
+    const adminId = listed.json().users.find((entry: { username: string }) => entry.username === "admin").id;
+    const protectedDelete = await app.inject({
+      method: "DELETE",
+      url: `/api/admin/users/${adminId}`,
+      headers: { cookie, "x-csrf-token": csrf },
+    });
+    expect(protectedDelete.statusCode).toBe(403);
+
+    await app.close();
+  });
+
   it("resolves sessions only while active", async () => {
     const db = createDatabase(DATABASE_URL);
     try {

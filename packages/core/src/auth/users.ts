@@ -126,3 +126,19 @@ export async function updateUserPassword(
   );
   return rows[0] ? toPublicUser(rows[0]) : null;
 }
+
+export async function deleteUser(db: Database, userId: string): Promise<"deleted" | "not_found" | "protected"> {
+  const { rows } = await db.query<{ username: string }>(
+    `SELECT username FROM users WHERE id = $1`,
+    [userId],
+  );
+  const user = rows[0];
+  if (!user) {
+    return "not_found";
+  }
+  if (user.username === "admin") {
+    return "protected";
+  }
+  await db.query(`DELETE FROM users WHERE id = $1`, [userId]);
+  return "deleted";
+}

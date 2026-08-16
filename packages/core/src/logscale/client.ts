@@ -86,8 +86,8 @@ export class LogScaleClient {
 
   async getResultPage(id: string, offset: number, limit: number): Promise<ResultPage> {
     const path =
-      `/api/v1/repositories/${encodeURIComponent(this.repository)}/queryjobs/${encodeURIComponent(id)}/results` +
-      `?offset=${encodeURIComponent(String(offset))}&limit=${encodeURIComponent(String(limit))}`;
+      `/api/v1/repositories/${encodeURIComponent(this.repository)}/queryjobs/${encodeURIComponent(id)}` +
+      `?paginationOffset=${encodeURIComponent(String(offset))}&paginationLimit=${encodeURIComponent(String(limit))}`;
     const response = await this.request("GET", path);
     const body = (await response.json()) as {
       events?: unknown[];
@@ -97,11 +97,14 @@ export class LogScaleClient {
       total?: number;
       done?: boolean;
       hasMore?: boolean;
+      metaData?: { eventCount?: number };
     };
     const events = body.events ?? body.results ?? [];
-    const total = body.total ?? offset + events.length;
-    const done =
-      body.done ?? (body.hasMore !== undefined ? !body.hasMore : events.length < limit);
+    const reportedTotal = body.total ?? body.metaData?.eventCount;
+    const total = reportedTotal ?? offset + events.length;
+    const done = reportedTotal != null && Number.isFinite(reportedTotal)
+      ? offset + events.length >= reportedTotal
+      : (body.hasMore !== undefined ? !body.hasMore : events.length < limit);
     return {
       events,
       offset: body.offset ?? offset,

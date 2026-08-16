@@ -2,7 +2,7 @@
  * Approximate Falcon LogScale REST paths used by {@link LogScaleClient}:
  * POST   /api/v1/repositories/{repo}/queryjobs
  * GET    /api/v1/repositories/{repo}/queryjobs/{id}
- * GET    /api/v1/repositories/{repo}/queryjobs/{id}/results?offset=&limit=
+ * GET    /api/v1/repositories/{repo}/queryjobs/{id}?paginationOffset=&paginationLimit=
  * DELETE /api/v1/repositories/{repo}/queryjobs/{id}
  * GET    /api/v1/status
  * GET    /api/v1/repositories/{repo}

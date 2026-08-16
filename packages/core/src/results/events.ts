@@ -28,6 +28,7 @@ export type EventArchiveHooks = {
 
 export type EventArchiveDeps = {
   encryptionKey: Buffer;
+  eventTailLimit?: number;
   fetch?: FetchFn;
   pageSize?: number;
   pollAttempts?: number;
@@ -52,6 +53,10 @@ const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_POLL_ATTEMPTS = 30;
 const DEFAULT_POLL_INTERVAL_MS = 20;
 const DEFAULT_MIN_WINDOW_MS = 60_000;
+
+export function appendEventTail(query: string, limit: number): string {
+  return /\|\s*tail\s*\(/i.test(query) ? query : `${query} | tail(${limit})`;
+}
 
 function isRetryableArchiveError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -194,7 +199,7 @@ async function markRunComplete(
     const updated = await client.query(
       `UPDATE query_runs
        SET status = 'complete', failure_reason = NULL, result_count = $2, finished_at = now()
-       WHERE id = $1 AND status = 'running'`,
+       WHERE id = $1 AND status IN ('pending', 'running')`,
       [runId, eventCount],
     );
     if ((updated.rowCount ?? 0) === 0) {
@@ -468,7 +473,7 @@ export async function archiveEventWindow(
 
   try {
     const job = await client.createQueryJob({
-      query: ctx.query_text,
+      query: appendEventTail(ctx.query_text, deps.eventTailLimit ?? 1000),
       start: window.start,
       end: window.end,
     });
@@ -504,7 +509,7 @@ export async function archiveEventWindow(
     let pageIndex = 0;
     let done = false;
     let reportedTotal: number | undefined;
-    let lastPageFull = false;
+    let pageExceededLimit = false;
 
     while (!done) {
       if (await isRunCancelled(db, runId)) {
@@ -513,7 +518,7 @@ export async function archiveEventWindow(
       const page = await client.getResultPage(jobId, offset, pageSize);
       reportedTotal = page.total;
       // LogScale often ignores limit and returns the full silent cap (e.g. 200) in one page.
-      lastPageFull = page.events.length >= pageSize;
+      pageExceededLimit ||= page.events.length > pageSize;
       if (page.events.length > 0) {
         await persistPage(db, ctx, runId, pageIndex, page.events, deps.hooks);
         totalEvents += page.events.length;
@@ -523,13 +528,15 @@ export async function archiveEventWindow(
       pageIndex += 1;
     }
 
-    // Cap without warning: job ends on a full page, or reported total exceeds fetched rows.
-    const truncated =
-      lastPageFull ||
-      (reportedTotal != null && Number.isFinite(reportedTotal) && reportedTotal > totalEvents);
+    // A page larger than the requested limit proves LogScale ignored the limit.
+    const truncated = pageExceededLimit || (reportedTotal != null && Number.isFinite(reportedTotal)
+      ? reportedTotal > totalEvents
+      : false);
     if (truncated && totalEvents > 0) {
       return handleResultCap(db, deps, ctx, runId, window, [
-        reportedTotal != null && reportedTotal > totalEvents
+        pageExceededLimit
+          ? `Result page full at ${totalEvents} events without exhaustion`
+          : reportedTotal != null && reportedTotal > totalEvents
           ? `Result total ${reportedTotal} exceeds fetched ${totalEvents}`
           : `Result page full at ${totalEvents} events without exhaustion`,
       ]);

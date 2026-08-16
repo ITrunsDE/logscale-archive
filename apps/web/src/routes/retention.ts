@@ -21,6 +21,13 @@ type HoldRow = {
   version_number: number;
 };
 
+type QueryVersionOptionRow = {
+  id: string;
+  connection_name: string;
+  query_name: string;
+  version_number: number;
+};
+
 export async function registerRetentionRoutes(
   app: FastifyInstance,
   db: Database,
@@ -52,6 +59,27 @@ export async function registerRetentionRoutes(
           reason: row.reason,
           createdByUserId: row.created_by_user_id,
           createdAt: row.created_at.toISOString(),
+          queryName: row.query_name,
+          versionNumber: row.version_number,
+        })),
+      };
+    },
+  );
+
+  app.get(
+    "/api/admin/retention/query-versions",
+    { preHandler: requireRole("admin") },
+    async () => {
+      const result = await db.query<QueryVersionOptionRow>(
+        `SELECT qv.id, lc.name AS connection_name, qv.name AS query_name, qv.version_number
+         FROM query_versions qv
+         JOIN logscale_connections lc ON lc.id = qv.connection_id
+         ORDER BY lc.name, qv.name, qv.version_number DESC`,
+      );
+      return {
+        queryVersions: result.rows.map((row) => ({
+          id: row.id,
+          connectionName: row.connection_name,
           queryName: row.query_name,
           versionNumber: row.version_number,
         })),

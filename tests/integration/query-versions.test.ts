@@ -123,17 +123,17 @@ function mockQueryJobFetch(events: unknown[]): typeof fetch {
         headers: { "content-type": "application/json" },
       });
     }
-    if (method === "GET" && url.includes("/queryjobs/job-1") && !url.includes("/results")) {
-      return new Response(JSON.stringify({ id: "job-1", state: "done" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (method === "GET" && url.includes("/results")) {
+    if (method === "GET" && url.includes("/queryjobs/job-1") && url.includes("paginationOffset=")) {
       return new Response(
         JSON.stringify({ events, offset: 0, limit: 20, total: events.length, done: true }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
+    }
+    if (method === "GET" && url.includes("/queryjobs/job-1")) {
+      return new Response(JSON.stringify({ id: "job-1", state: "done" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
     if (method === "DELETE") {
       return new Response(null, { status: 204 });
@@ -313,6 +313,7 @@ describe("query versions", () => {
     expect(passing.ok).toBe(true);
     expect(passing.sampleEvents).toHaveLength(1);
 
+    await db.query(`UPDATE query_versions SET schedule_cron = NULL WHERE id = $1`, [version.id]);
     await activateQueryVersion(db, version.id);
     const active = await db.query<{ active: boolean }>(
       "SELECT active FROM query_versions WHERE id = $1",
@@ -320,11 +321,12 @@ describe("query versions", () => {
     );
     expect(active.rows[0]!.active).toBe(true);
 
-    const schedule = await db.query<{ paused: boolean }>(
-      "SELECT paused FROM query_schedules WHERE query_version_id = $1",
+    const schedule = await db.query<{ paused: boolean; next_run_at: Date | null }>(
+      "SELECT paused, next_run_at FROM query_schedules WHERE query_version_id = $1",
       [version.id],
     );
     expect(schedule.rows[0]!.paused).toBe(false);
+    expect(schedule.rows[0]!.next_run_at).not.toBeNull();
 
     await db.close();
   });

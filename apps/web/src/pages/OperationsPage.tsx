@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useActionFeedback } from "../client/actionFeedback.js";
+import { formatDateTime, getDisplayTimezone } from "../client/time.js";
 
 type AuthUser = {
   id: string;
@@ -168,6 +169,7 @@ function JobStatCard({
 }
 
 export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
+  const timezone = getDisplayTimezone();
   const flash = useActionFeedback();
   const [status, setStatus] = useState<OperationsStatus | null>(null);
   const [selectedBackupId, setSelectedBackupId] = useState("");
@@ -378,14 +380,14 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
                     <tbody>
                       {runs.map((run) => (
                         <tr key={run.id}>
-                          <td>{new Date(run.finishedAt ?? run.createdAt).toLocaleString()}</td>
+                          <td>{formatDateTime(run.finishedAt ?? run.createdAt, timezone)}</td>
                           <td className="mono">
                             {run.queryName} v{run.versionNumber}
                           </td>
                           <td>{run.kind}</td>
                           <td className="mono">
-                            {new Date(run.windowStart).toLocaleString()} →{" "}
-                            {new Date(run.windowEnd).toLocaleString()}
+                            {formatDateTime(run.windowStart, timezone)} →{" "}
+                            {formatDateTime(run.windowEnd, timezone)}
                           </td>
                           {runsStatus === "failed" ? (
                             <td>
@@ -450,7 +452,7 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
                 ) : (
                   status.backups.map((backup) => (
                     <tr key={backup.id}>
-                      <td>{new Date(backup.createdAt).toLocaleString()}</td>
+                      <td>{formatDateTime(backup.createdAt, timezone)}</td>
                       <td>
                         <span className={statusStampClass(backup.status)}>{backup.status}</span>
                       </td>
@@ -492,7 +494,7 @@ export function OperationsPage({ user, csrfToken }: OperationsPageProps) {
                   .filter((backup) => backup.status === "complete")
                   .map((backup) => (
                     <option key={backup.id} value={backup.id}>
-                      {new Date(backup.createdAt).toLocaleString()} · {formatBytes(backup.sizeBytes)} (
+                      {formatDateTime(backup.createdAt, timezone)} · {formatBytes(backup.sizeBytes)} (
                       {backup.id.slice(0, 8)})
                     </option>
                   ))}

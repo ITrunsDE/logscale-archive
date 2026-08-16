@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useActionFeedback } from "../client/actionFeedback.js";
+import { fromDisplayLocalInput, getDisplayTimezone } from "../client/time.js";
 
 type AuthUser = {
   id: string;
@@ -105,19 +106,16 @@ function stampClass(status: string | null): string {
   return "stamp";
 }
 
-function fromLocalInput(local: string): string | undefined {
+function fromLocalInput(local: string, timezone: string): string | undefined | null {
   if (!local.trim()) {
     return undefined;
   }
-  const date = new Date(local);
-  if (Number.isNaN(date.getTime())) {
-    return undefined;
-  }
-  return date.toISOString();
+  return fromDisplayLocalInput(local, timezone);
 }
 
 export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPageProps) {
   const flash = useActionFeedback();
+  const timezone = getDisplayTimezone();
   const [versions, setVersions] = useState<QueryVersionOption[]>([]);
   const [queryVersionId, setQueryVersionId] = useState("");
   const [from, setFrom] = useState("");
@@ -156,6 +154,12 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
     if (!queryVersionId) {
       return;
     }
+    const fromValue = fromLocalInput(from, timezone);
+    const toValue = fromLocalInput(to, timezone);
+    if (fromValue === null || toValue === null) {
+      flash.err(`Enter a valid time in ${timezone}.`);
+      return;
+    }
     flash.busy("Searching…", "search");
     try {
       const jsonFilters = fieldValue.trim()
@@ -165,8 +169,8 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
         method: "POST",
         body: JSON.stringify({
           queryVersionId,
-          from: fromLocalInput(from),
-          to: fromLocalInput(to),
+          from: fromValue,
+          to: toValue,
           jsonFilters,
           offset,
         }),
@@ -209,7 +213,7 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
             </select>
           </label>
           <label>
-            From
+            From ({timezone})
             <input
               type="datetime-local"
               value={from}
@@ -217,7 +221,7 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
             />
           </label>
           <label>
-            To
+            To ({timezone})
             <input
               type="datetime-local"
               value={to}
@@ -254,17 +258,23 @@ export function ResultsPage({ user, csrfToken, onRequestExport }: ResultsPagePro
                     key={format}
                     type="button"
                     disabled={flash.anyBusy || !queryVersionId}
-                    onClick={() =>
+                    onClick={() => {
+                      const fromValue = fromLocalInput(from, timezone);
+                      const toValue = fromLocalInput(to, timezone);
+                      if (fromValue === null || toValue === null) {
+                        flash.err(`Enter a valid time in ${timezone}.`);
+                        return;
+                      }
                       onRequestExport({
                         queryVersionId,
                         format,
-                        from: fromLocalInput(from),
-                        to: fromLocalInput(to),
+                        from: fromValue,
+                        to: toValue,
                         jsonFilters: fieldValue.trim()
                           ? [{ field: fieldName.trim(), value: fieldValue.trim() }]
                           : [],
-                      })
-                    }
+                      });
+                    }}
                   >
                     Export {format.toUpperCase()}
                   </button>

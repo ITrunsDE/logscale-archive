@@ -175,20 +175,9 @@ function mockFetch(jobs: MockJob[], pageSize = PAGE_SIZE): typeof fetch {
     const jobId = jobMatch?.[1] ?? "job-1";
     const config = jobConfigs.get(jobId) ?? { pages: [] };
 
-    if (method === "GET" && url.includes(`/queryjobs/${jobId}`) && !url.includes("/results")) {
-      return new Response(
-        JSON.stringify({
-          id: jobId,
-          state: "done",
-          ...(config.warnings ? { warnings: config.warnings } : {}),
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (method === "GET" && url.includes("/results")) {
+    if (method === "GET" && url.includes(`/queryjobs/${jobId}`) && url.includes("paginationOffset=")) {
       const parsed = new URL(url, "http://local");
-      const offset = Number(parsed.searchParams.get("offset") ?? 0);
+      const offset = Number(parsed.searchParams.get("paginationOffset") ?? 0);
       const pages = config.pages ?? [];
       const pageIndex = Math.floor(offset / pageSize);
       const pageEvents = pages[pageIndex] ?? [];
@@ -196,6 +185,17 @@ function mockFetch(jobs: MockJob[], pageSize = PAGE_SIZE): typeof fetch {
       const total = pages.reduce((sum, page) => sum + page.length, 0);
       return new Response(
         JSON.stringify({ events: pageEvents, offset, limit: pageSize, total, done }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (method === "GET" && url.includes(`/queryjobs/${jobId}`)) {
+      return new Response(
+        JSON.stringify({
+          id: jobId,
+          state: "done",
+          ...(config.warnings ? { warnings: config.warnings } : {}),
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }

@@ -21,6 +21,13 @@ type StorageStatus = {
   volumes: Array<{ path: string; usedPercent: number }>;
 };
 
+type QueryVersionOption = {
+  id: string;
+  connectionName: string;
+  queryName: string;
+  versionNumber: number;
+};
+
 type RetentionPageProps = {
   user: AuthUser;
   csrfToken: string;
@@ -50,6 +57,7 @@ async function api<T>(
 export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
   const flash = useActionFeedback();
   const [holds, setHolds] = useState<RetentionHold[]>([]);
+  const [queryVersions, setQueryVersions] = useState<QueryVersionOption[]>([]);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [holdQueryVersionId, setHoldQueryVersionId] = useState("");
   const [holdReason, setHoldReason] = useState("");
@@ -57,11 +65,13 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
   const [deleteBefore, setDeleteBefore] = useState("");
 
   async function reload() {
-    const [holdsResponse, statusResponse] = await Promise.all([
+    const [holdsResponse, queryVersionsResponse, statusResponse] = await Promise.all([
       api<{ holds: RetentionHold[] }>(csrfToken, "/api/admin/retention/holds"),
+      api<{ queryVersions: QueryVersionOption[] }>(csrfToken, "/api/admin/retention/query-versions"),
       api<{ storage: StorageStatus }>(csrfToken, "/api/admin/system/status"),
     ]);
     setHolds(holdsResponse.holds);
+    setQueryVersions(queryVersionsResponse.queryVersions);
     setStorage(statusResponse.storage);
   }
 
@@ -201,12 +211,19 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
       <form className="panel stack" onSubmit={onCreateHold}>
         <h2>Add hold</h2>
         <label>
-          Query version ID
-          <input
+          Query version
+          <select
             value={holdQueryVersionId}
             onChange={(event) => setHoldQueryVersionId(event.target.value)}
             required
-          />
+          >
+            <option value="">Choose query version</option>
+            {queryVersions.map((version) => (
+              <option key={version.id} value={version.id}>
+                {version.connectionName} · {version.queryName} · v{version.versionNumber}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Reason
@@ -232,12 +249,19 @@ export function RetentionPage({ user, csrfToken }: RetentionPageProps) {
       <form className="panel stack" onSubmit={onManualDelete}>
         <h2>Manual delete</h2>
         <label>
-          Query version ID
-          <input
+          Query version
+          <select
             value={deleteQueryVersionId}
             onChange={(event) => setDeleteQueryVersionId(event.target.value)}
             required
-          />
+          >
+            <option value="">Choose query version</option>
+            {queryVersions.map((version) => (
+              <option key={version.id} value={version.id}>
+                {version.connectionName} · {version.queryName} · v{version.versionNumber}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Before (optional ISO timestamp)

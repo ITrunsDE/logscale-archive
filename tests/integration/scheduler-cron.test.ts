@@ -45,7 +45,7 @@ describe("enqueueDueRuns cron spacing", () => {
 
   beforeEach(async () => {
     await resetDatabase(DATABASE_URL);
-    await migrateDatabase(db);
+    await migrateDatabase(DATABASE_URL);
   });
 
   afterEach(async () => {
@@ -98,5 +98,40 @@ describe("enqueueDueRuns cron spacing", () => {
       [queryVersionId],
     );
     expect(Number(runsAgain.rows[0]!.count)).toBe(1);
+  });
+
+  it("creates one run when scheduler ticks overlap", async () => {
+    const encrypted = encryptSecret("tok", Buffer.from(ENCRYPTION_KEY, "hex"));
+    const connection = await db.query<{ id: string }>(
+      `INSERT INTO logscale_connections
+         (name, endpoint, repository, token_ciphertext, token_key_id, status)
+       VALUES ('concurrent', 'https://example', 'repo', $1, 'env-v1', 'valid')
+       RETURNING id`,
+      [encryptedSecretToBytes(encrypted)],
+    );
+    const version = await db.query<{ id: string }>(
+      `INSERT INTO query_versions
+         (connection_id, name, version_number, query_text, mode, schedule_cron, schedule_timezone,
+          initial_start_at, correction_window_seconds, active, test_passed_at)
+       VALUES ($1, 'concurrent-events', 1, '*', 'event', '0 * * * *', 'UTC',
+               '2026-08-15T18:00:00.000Z', 300, true, now())
+       RETURNING id`,
+      [connection.rows[0]!.id],
+    );
+    const queryVersionId = version.rows[0]!.id;
+    await db.query(
+      `INSERT INTO query_schedules (query_version_id, next_run_at, watermark_at, paused)
+       VALUES ($1, '2026-08-15T19:00:00.000Z', '2026-08-15T18:00:00.000Z', false)`,
+      [queryVersionId],
+    );
+
+    const now = new Date("2026-08-15T19:20:00.000Z");
+    await Promise.all([enqueueDueRuns(db, now), enqueueDueRuns(db, now)]);
+
+    const runs = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM query_runs WHERE query_version_id = $1`,
+      [queryVersionId],
+    );
+    expect(Number(runs.rows[0]!.count)).toBe(1);
   });
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { loadConfig } from "@archive/config";
+import { createOperationsLogger, loadConfig, type OperationsLogger } from "@archive/config";
 import {
   claimNextRun,
   createDatabase,
@@ -27,9 +27,27 @@ export type WorkerLoopDeps = {
   fetch?: typeof fetch;
   storageGuard?: import("./storageGuard.js").StorageGuardDeps;
   backup?: import("@archive/core").BackupDeps;
+  logger?: OperationsLogger;
   /** Runs with started_at before this are treated as orphans from a previous worker. */
   bootAt?: Date;
+  eventTailLimit?: number;
 };
+
+export function logArchiveOutcome(
+  logger: Pick<OperationsLogger, "info" | "warn">,
+  runId: string,
+  mode: "event" | "aggregate",
+  outcome: { ok: boolean; retryable: boolean; split?: boolean },
+): void {
+  const split = outcome.split === true;
+  logger[!outcome.ok && !split ? "warn" : "info"]("query_run.finished", {
+    runId,
+    mode,
+    ok: outcome.ok || split,
+    retryable: outcome.retryable,
+    split,
+  });
+}
 
 export async function runWorkerTick(
   db: ReturnType<typeof createDatabase>,
@@ -63,15 +81,36 @@ export async function runWorkerTick(
   if (!run) {
     return false;
   }
-  const mode = await db.query<{ mode: string }>(
-    `SELECT mode FROM query_versions WHERE id = $1`,
+  const mode = await db.query<{ mode: string; name: string; version_number: number }>(
+    `SELECT mode, name, version_number FROM query_versions WHERE id = $1`,
     [run.queryVersionId],
   );
-  const archiveDeps = { encryptionKey: deps.encryptionKey, fetch: deps.fetch };
-  if (mode.rows[0]?.mode === "aggregate") {
-    await runAggregateArchiveJob(db, archiveDeps, run);
-  } else {
-    await runEventArchiveJob(db, archiveDeps, run);
+  const archiveMode = mode.rows[0]?.mode === "aggregate" ? "aggregate" : "event";
+  deps.logger?.info("query_run.started", {
+    runId: run.id,
+    queryVersionId: run.queryVersionId,
+    queryName: mode.rows[0]?.name,
+    versionNumber: mode.rows[0]?.version_number,
+    kind: run.kind,
+    mode: archiveMode,
+  });
+  const archiveDeps = {
+    encryptionKey: deps.encryptionKey,
+    eventTailLimit: deps.eventTailLimit,
+    fetch: deps.fetch,
+    hooks: deps.logger
+      ? {
+          afterPagePersisted: ({ pageIndex, inserted }: { pageIndex: number; inserted: number }) => {
+            deps.logger?.debug("query_run.page_persisted", { runId: run.id, pageIndex, inserted });
+          },
+        }
+      : undefined,
+  };
+  const outcome = archiveMode === "aggregate"
+    ? await runAggregateArchiveJob(db, archiveDeps, run)
+    : await runEventArchiveJob(db, archiveDeps, run);
+  if (deps.logger) {
+    logArchiveOutcome(deps.logger, run.id, archiveMode, outcome);
   }
   return true;
 }
@@ -83,21 +122,28 @@ async function main() {
   }
 
   const db = createDatabase(config.databaseUrl);
+  const logger = createOperationsLogger("worker", config.operationsLog);
   const workerId = process.env.WORKER_ID ?? randomUUID();
   const bootAt = new Date();
-  const deps: WorkerLoopDeps = { encryptionKey: config.encryptionKey, bootAt };
+  const deps: WorkerLoopDeps = {
+    encryptionKey: config.encryptionKey,
+    eventTailLimit: config.eventTailLimit,
+    bootAt,
+    logger,
+  };
 
   const reclaimed = await reclaimOrphanedQueryRuns(db, bootAt);
   if (reclaimed > 0) {
-    console.info(`reclaimed ${reclaimed} orphaned running query run(s)`);
+    logger.info("worker.orphaned_runs_reclaimed", { count: reclaimed });
   }
+  logger.info("worker.started");
 
   touchHealth();
   const tick = async () => {
     try {
       await runWorkerTick(db, deps, workerId);
     } catch (error) {
-      console.error(error instanceof Error ? error.message : "worker tick failed");
+      logger.error("worker.tick_failed", { error: error instanceof Error ? error.name : "unknown" });
     }
   };
 

@@ -4,7 +4,7 @@ import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "@archive/config";
+import { createOperationsLogger, loadConfig } from "@archive/config";
 import {
   checkDatabaseHealth,
   checkWorkerHealth,
@@ -29,6 +29,7 @@ const CLIENT_ROOT = join(WEB_ROOT, "../client");
 
 export async function buildServer() {
   const config = loadConfig();
+  const logger = createOperationsLogger("web", config.operationsLog);
   const db = createDatabase(config.databaseUrl);
   await migrateDatabase(config.databaseUrl);
 
@@ -63,6 +64,7 @@ export async function buildServer() {
   }));
 
   app.get("/api/status", async () => ({
+    displayTimezone: config.displayTimezone,
     storage: canAcquireStorage(),
     worker: checkWorkerHealth(),
     database: { ok: await checkDatabaseHealth(db) },
@@ -105,10 +107,11 @@ export async function buildServer() {
   }
 
   app.addHook("onClose", async () => {
+    await logger.flush();
     await db.close();
   });
 
-  return { app, config, db };
+  return { app, config, db, logger };
 }
 
 async function main() {
@@ -117,8 +120,9 @@ async function main() {
     throw new Error(`web entrypoint requires APP_ROLE=web, got ${config.role}`);
   }
 
-  const { app } = await buildServer();
+  const { app, logger } = await buildServer();
   await app.listen({ host: config.bindHost, port: config.port });
+  logger.info("web.started", { port: config.port, bindHost: config.bindHost });
 }
 
 const isMain = process.argv[1]?.endsWith("main.ts") || process.argv[1]?.endsWith("main.js");

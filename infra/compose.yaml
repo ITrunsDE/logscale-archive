@@ -15,6 +15,7 @@ services:
     # intentionally unpublished — host must not reach postgres
 
   web:
+    image: ${ARCHIVE_IMAGE:-archive:local}
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -26,6 +27,8 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-change-me-session-secret-min-32-chars}
       RECOVERY_SECRET: ${RECOVERY_SECRET:-change-me-recovery-secret-local-only}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      DATA_PATH: /data
+      BACKUP_PATH: /data/backups
       WORKER_HEALTH_FILE: /data/archive-worker-health
     ports:
       - "127.0.0.1:8080:8080"
@@ -42,6 +45,7 @@ services:
       retries: 10
 
   worker:
+    image: ${ARCHIVE_IMAGE:-archive:local}
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -49,6 +53,8 @@ services:
       APP_ROLE: worker
       DATABASE_URL: postgres://archive:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/archive
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      DATA_PATH: /data
+      BACKUP_PATH: /data/backups
       WORKER_HEALTH_FILE: /data/archive-worker-health
     depends_on:
       postgres:

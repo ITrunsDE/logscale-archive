@@ -1,0 +1,23 @@
+# Optional override. Include this file only when direct LogScale operations logging is wanted.
+services:
+  web:
+    environment:
+      LOG_TRANSPORT: logscale
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOGSCALE_LOG_ENDPOINT: ${LOGSCALE_LOG_ENDPOINT:?LOGSCALE_LOG_ENDPOINT is required}
+      LOGSCALE_LOG_INGEST_TOKEN_FILE: /run/secrets/logscale_log_ingest_token
+    secrets:
+      - logscale_log_ingest_token
+
+  worker:
+    environment:
+      LOG_TRANSPORT: logscale
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOGSCALE_LOG_ENDPOINT: ${LOGSCALE_LOG_ENDPOINT:?LOGSCALE_LOG_ENDPOINT is required}
+      LOGSCALE_LOG_INGEST_TOKEN_FILE: /run/secrets/logscale_log_ingest_token
+    secrets:
+      - logscale_log_ingest_token
+
+secrets:
+  logscale_log_ingest_token:
+    file: ./secrets/logscale_log_ingest_token

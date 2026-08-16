@@ -32,6 +32,7 @@ export {
 export {
   countUsers,
   createUser,
+  deleteUser,
   findUserById,
   findUserByUsername,
   listUsers,
@@ -132,6 +133,7 @@ export {
 } from "./results/aggregates.js";
 export {
   archiveEventWindow,
+  appendEventTail,
   resolveEventTimestamp,
   type ArchiveOutcome,
   type ArchiveWindow,

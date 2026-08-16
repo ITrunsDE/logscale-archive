@@ -3,7 +3,7 @@
 #
 # External PostgreSQL (recommended):
 #   export DATABASE_URL='postgres://user:pass@db.example:5432/archive?sslmode=require'
-#   docker compose -f infra/compose.yaml -f infra/compose.production.yaml up -d web worker
+#   docker compose -f infra/compose.yaml -f infra/compose.production.yaml -f infra/compose.external-postgres.yaml up -d web worker
 #
 # Bundled PostgreSQL (single-host only):
 #   docker compose -f infra/compose.yaml -f infra/compose.production.yaml --profile bundled-db up -d
@@ -19,6 +19,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
       RECOVERY_SECRET: ${RECOVERY_SECRET:?RECOVERY_SECRET is required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      INSTANCE_NAME: ${INSTANCE_NAME:?INSTANCE_NAME is required}
       SECURE_COOKIES: ${SECURE_COOKIES:-true}
       REQUIRE_DB_TLS: ${REQUIRE_DB_TLS:-true}
       DATA_PATH: /data

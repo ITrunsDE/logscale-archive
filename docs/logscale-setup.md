@@ -30,9 +30,20 @@ Scheduled queries must:
 - Target the connected repository
 - Use Query Jobs compatible syntax
 - For **event** mode: results must include `@id` and `#repo` fields
-- For **aggregate** mode: fixed time windows; no silent partial success on cap exceeded
+- For **aggregate** mode: fixed time windows (`timeChart`, `bucket`, or `span`); no silent partial success on cap exceeded
+- Not contain `head()` or numeric `tail()`; archive controls result limits
 
 Test query in UI before activation.
+
+## Create first archive
+
+1. Open **Queries** and create a query with its connection, mode, and query text.
+2. Under **Schedule & retention**, set cron, timezone, optional initial start, correction window, and retention period. Default schedule is hourly UTC.
+3. Save draft, select its version, then run **Test**.
+4. Activate only after test passes. Worker creates scheduled archive runs.
+5. Use **Results** for stored data, **Exports** for asynchronous files, **Operations** for run and backup status, and [retention.md](retention.md) for retention and deletion.
+
+For event queries, **Fill history** creates a backfill after activation. Aggregate queries do not support backfill.
 
 ## Token rotation
 

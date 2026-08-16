@@ -29,16 +29,21 @@ For HTTPS on a public hostname, terminate TLS in front of web only.
 ### Compose NGINX profile
 
 ```bash
-# Mount real certs into the nginx service (adjust compose volumes)
-docker compose -f infra/compose.yaml --profile nginx up -d
+export NGINX_CERT_PATH=/etc/logscale-archive/nginx-certs
+docker compose \
+  -f infra/compose.yaml \
+  -f infra/compose.production.yaml \
+  -f infra/compose.external-postgres.yaml \
+  -f infra/compose.nginx.yaml \
+  --profile nginx up -d --no-build
 ```
 
-`infra/nginx/nginx.conf.example` proxies **web only**. It does not expose worker or postgres.
+`NGINX_CERT_PATH` must contain `fullchain.pem` and `privkey.pem`. `infra/nginx/nginx.conf.example` proxies **web only**. It does not expose worker or postgres.
 
 Checklist:
 
 - [ ] Valid TLS certificates on NGINX
-- [ ] Web still on internal network; only NGINX publishes 443
+- [ ] Web host port remains localhost-only; NGINX publishes 443
 - [ ] `SECURE_COOKIES=true` (set in production overrides)
 - [ ] Restrict admin paths by IP or add SSO at proxy (V1 has no built-in SSO)
 

@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useActionFeedback } from "../client/actionFeedback.js";
+import { formatDateTime, fromDisplayLocalInput, getDisplayTimezone, toDisplayLocalInput } from "../client/time.js";
 
 const DEFAULT_SCHEDULE_CRON = "0 * * * *";
 const DEFAULT_SCHEDULE_TIMEZONE = "UTC";
+const SCHEDULE_TIMEZONES = ["UTC", ...Intl.supportedValuesOf("timeZone")];
 
 type AuthUser = {
   id: string;
@@ -78,38 +80,9 @@ async function api<T>(csrfToken: string, url: string, init?: RequestInit): Promi
   return body as T;
 }
 
-function formatTestedAt(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  return value.slice(11, 16);
-}
-
-function formatNextRun(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  return `${value.slice(0, 16).replace("T", " ")} UTC`;
-}
-
-function toLocalInput(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function fromLocalInput(local: string): string {
-  const date = new Date(local);
-  if (Number.isNaN(date.getTime())) {
-    return new Date(0).toISOString();
-  }
-  return date.toISOString();
-}
 
 export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
+  const timezone = getDisplayTimezone();
   const flash = useActionFeedback();
   const [connections, setConnections] = useState<PublicConnection[]>([]);
   const [connectionId, setConnectionId] = useState("");
@@ -419,6 +392,12 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
     if (!selectedVersionId || !backfillEnabled || !backfillStart || !backfillEnd) {
       return;
     }
+    const start = fromDisplayLocalInput(backfillStart, timezone);
+    const end = fromDisplayLocalInput(backfillEnd, timezone);
+    if (!start || !end) {
+      flash.err(`Enter a valid time in ${timezone}.`);
+      return;
+    }
     flash.busy("Creating backfill…", "backfill");
     try {
       const result = await api<{ status: BackfillStatus; created?: number; requeued?: number }>(
@@ -427,8 +406,8 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
         {
           method: "POST",
           body: JSON.stringify({
-            start: fromLocalInput(backfillStart),
-            end: fromLocalInput(backfillEnd),
+            start,
+            end,
           }),
         },
       );
@@ -582,8 +561,8 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
                             v{version.versionNumber} · {version.active ? "active" : "inactive"}
                           </span>
                           <span className="version-meta">
-                            <span>tested {formatTestedAt(version.testPassedAt)}</span>
-                            <span>next {formatNextRun(version.nextRunAt)}</span>
+                            <span>tested {formatDateTime(version.testPassedAt, timezone)}</span>
+                            <span>next {formatDateTime(version.nextRunAt, timezone)}</span>
                           </span>
                         </button>
                         {selected ? (
@@ -713,22 +692,26 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
                   onChange={(event) => setScheduleCron(event.target.value)}
                   placeholder={DEFAULT_SCHEDULE_CRON}
                 />
-                <span className="field-hint">Default: hourly UTC (`{DEFAULT_SCHEDULE_CRON}`)</span>
+                <span className="field-hint">Default: hourly (`{DEFAULT_SCHEDULE_CRON}`)</span>
               </label>
               <label>
                 Schedule timezone
-                <input
+                <select
                   value={scheduleTimezone}
                   onChange={(event) => setScheduleTimezone(event.target.value)}
-                  placeholder={DEFAULT_SCHEDULE_TIMEZONE}
-                />
+                >
+                  {SCHEDULE_TIMEZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+                </select>
               </label>
               <label>
-                Initial start
+                Initial start ({timezone})
                 <input
                   type="datetime-local"
-                  value={toLocalInput(initialStartAt)}
-                  onChange={(event) => setInitialStartAt(fromLocalInput(event.target.value))}
+                  value={toDisplayLocalInput(initialStartAt, timezone)}
+                  onChange={(event) => {
+                    const next = fromDisplayLocalInput(event.target.value, timezone);
+                    if (next) setInitialStartAt(next);
+                  }}
                 />
               </label>
               <label>
@@ -764,7 +747,7 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
               ) : null}
               <div className="schedule-grid">
                 <label>
-                  Start
+                  Start ({timezone})
                   <input
                     type="datetime-local"
                     value={backfillStart}
@@ -773,7 +756,7 @@ export function QueryEditorPage({ user, csrfToken }: QueryEditorPageProps) {
                   />
                 </label>
                 <label>
-                  End
+                  End ({timezone})
                   <input
                     type="datetime-local"
                     value={backfillEnd}

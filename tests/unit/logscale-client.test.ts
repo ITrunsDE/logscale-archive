@@ -121,17 +121,15 @@ describe("LogScaleClient", () => {
   });
 
   it("paginates query job results", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      expect(String(url)).toContain("offset=100");
-      expect(String(url)).toContain("limit=50");
-      return jsonResponse({
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
         events: [{ "@id": "ev-100" }],
         offset: 100,
         limit: 50,
         total: 101,
         done: true,
-      });
-    });
+      }),
+    );
 
     const client = new LogScaleClient({
       endpoint: ENDPOINT,
@@ -148,6 +146,63 @@ describe("LogScaleClient", () => {
       total: 101,
       done: true,
     });
+  });
+
+  it("uses LogScale metadata eventCount as the result total", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        events: [{ "@id": "ev-0" }],
+        done: true,
+        metaData: { eventCount: 100 },
+      }),
+    );
+    const client = new LogScaleClient({
+      endpoint: ENDPOINT,
+      repository: REPO,
+      token: TOKEN,
+      fetch: fetchMock,
+    });
+
+    const page = await client.getResultPage("job-metadata", 0, 100);
+    expect(page.total).toBe(100);
+  });
+
+  it("keeps paging until the metadata total is reached", async () => {
+    const client = new LogScaleClient({
+      endpoint: ENDPOINT,
+      repository: REPO,
+      token: TOKEN,
+      fetch: vi.fn(async () =>
+        jsonResponse({ events: [{ "@id": "ev-0" }], done: true, metaData: { eventCount: 2 } }),
+      ),
+    });
+
+    expect((await client.getResultPage("job-next-page", 0, 1)).done).toBe(false);
+  });
+
+  it("uses LogScale pagination parameters on query job results", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe(`/api/v1/repositories/${REPO}/queryjobs/job-8`);
+      expect(parsed.searchParams.get("paginationOffset")).toBe("100");
+      expect(parsed.searchParams.get("paginationLimit")).toBe("50");
+      return jsonResponse({
+        events: [{ "@id": "ev-100" }],
+        offset: 100,
+        limit: 50,
+        total: 101,
+        done: true,
+      });
+    });
+
+    const client = new LogScaleClient({
+      endpoint: ENDPOINT,
+      repository: REPO,
+      token: TOKEN,
+      fetch: fetchMock,
+    });
+
+    await client.getResultPage("job-8", 100, 50);
   });
 
   it("deletes query jobs during cleanup", async () => {

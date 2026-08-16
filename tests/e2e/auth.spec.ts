@@ -22,5 +22,8 @@ test.describe("auth browser flow", () => {
     await createUser.getByRole("button", { name: "Create user" }).click();
 
     await expect(page.getByRole("cell", { name: "viewer1" })).toBeVisible();
+    await page.getByRole("button", { name: "Delete" }).click();
+
+    await expect(page.getByRole("cell", { name: "viewer1" })).not.toBeVisible();
   });
 });

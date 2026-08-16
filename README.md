@@ -1,6 +1,6 @@
 # LogScale Archive
 
-Self-hosted archive for scheduled Falcon LogScale queries. Stores results in PostgreSQL and exposes a local web UI for administration, search, and export.
+LogScale Archive stores scheduled Falcon LogScale query results in PostgreSQL. Review or export stored results through a local web interface without copying a whole LogScale repository.
 
 Licensed under [AGPL-3.0](LICENSE).
 
@@ -18,7 +18,7 @@ cp .env.example .env
 docker compose -f infra/compose.yaml up --build
 ```
 
-Open `http://127.0.0.1:8080`. Web binds to localhost; PostgreSQL is not published on the host.
+Open `http://127.0.0.1:8080`. The host port is localhost-only; PostgreSQL is not published on the host.
 
 For host access to PostgreSQL during development only:
 
@@ -28,17 +28,25 @@ docker compose -f infra/compose.yaml -f infra/compose.postgres.yaml up -d
 
 **Do not use `compose.postgres.yaml` in production.**
 
+## Display timezone
+
+Set `DISPLAY_TIMEZONE` in `.env` to an IANA timezone, for example `Europe/Berlin`.
+It controls all dates shown in the web app and how date/time inputs are interpreted; invalid
+or missing values use UTC. Schedule timezone remains configurable per query. Database, API,
+and LogScale timestamps stay UTC.
+
 ## Production
 
 See [docs/installation.md](docs/installation.md) for secrets, external PostgreSQL, volumes, and first bootstrap.
 
 | Topic | Guide |
 | --- | --- |
-| Install & upgrade | [docs/installation.md](docs/installation.md) |
+| Install, image & upgrade | [docs/installation.md](docs/installation.md) |
 | Security & encryption | [docs/security.md](docs/security.md) |
-| Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
 | Remote access (VPN / NGINX) | [docs/remote-access.md](docs/remote-access.md) |
 | LogScale token setup | [docs/logscale-setup.md](docs/logscale-setup.md) |
+| Retention policy and deletion | [docs/retention.md](docs/retention.md) |
+| Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
 
 Production stack:
 
@@ -47,10 +55,13 @@ export DATABASE_URL='postgres://user:pass@db.example:5432/archive?sslmode=requir
 export ENCRYPTION_KEY='…64 hex chars…'
 export SESSION_SECRET='…'
 export RECOVERY_SECRET='…'
-docker compose -f infra/compose.yaml -f infra/compose.production.yaml up -d web worker
+export INSTANCE_NAME='archive-prod-1'
+export ARCHIVE_IMAGE='ghcr.io/ITrunsDE/logscale-archive@sha256:…'
+docker compose -f infra/compose.yaml -f infra/compose.production.yaml -f infra/compose.external-postgres.yaml pull web worker
+docker compose -f infra/compose.yaml -f infra/compose.production.yaml -f infra/compose.external-postgres.yaml up -d --no-build web worker
 ```
 
-Pin releases to an immutable digest from GitHub Releases (checksum + SBOM attached).
+Start with [installation.md](docs/installation.md), then secure remote access, add a LogScale connection, create and activate a query, and set backup operations.
 
 ## Development
 

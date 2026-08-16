@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  activateQueryVersion,
   createQueryDraft,
   deleteQueryVersion,
   listQueryNames,
@@ -98,6 +99,40 @@ describe("listQueryVersions", () => {
 
     const versions = await listQueryVersions(db, "conn-1", "events");
     expect(versions[0]?.nextRunAt).toBeNull();
+  });
+});
+
+describe("activateQueryVersion", () => {
+  it("creates a schedule for a legacy version without cron", async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "v1",
+          connection_id: "conn-1",
+          name: "events",
+          version_number: 1,
+          query_text: "#repo=a",
+          mode: "event",
+          schedule_cron: null,
+          schedule_timezone: "UTC",
+          initial_start_at: new Date("2026-01-01T00:00:00.000Z"),
+          correction_window_seconds: 0,
+          retention_days: null,
+          active: false,
+          test_passed_at: new Date("2026-01-01T00:00:00.000Z"),
+          created_at: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ],
+    });
+    const db = { query } as unknown as Database;
+
+    await activateQueryVersion(db, "v1");
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO query_schedules"),
+      ["v1"],
+    );
   });
 });
 

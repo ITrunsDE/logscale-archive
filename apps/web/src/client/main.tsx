@@ -24,6 +24,7 @@ import { ResultsPage } from "../pages/ResultsPage.js";
 import { ExportsPage } from "../pages/ExportsPage.js";
 import { ActionFeedbackProvider, useActionFeedback } from "./actionFeedback.js";
 import { APP_VERSION } from "../appVersion.js";
+import { formatDateTime, setDisplayTimezone } from "./time.js";
 import "./styles.css";
 
 type AuthUser = {
@@ -58,6 +59,7 @@ type AppView =
 type Theme = "light" | "dark";
 
 type StatusPayload = {
+  displayTimezone: string;
   storage: { decision: "allow" | "warn" | "block" };
   worker: { ok: boolean; lastSeen: string | null };
   database: { ok: boolean };
@@ -323,7 +325,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (state.kind !== "authenticated" || state.user.role !== "admin") {
+    if (state.kind !== "authenticated") {
       return;
     }
     let cancelled = false;
@@ -331,6 +333,7 @@ function App() {
       try {
         const next = await fetchJson<StatusPayload>("/api/status");
         if (!cancelled) {
+          setDisplayTimezone(next.displayTimezone);
           setStatus(next);
         }
       } catch {
@@ -492,7 +495,11 @@ function App() {
               </span>
               <span
                 className={`stamp ${status.worker.ok ? "stamp-complete" : "stamp-failed"}`}
-                title={status.worker.lastSeen ? `Worker last seen ${status.worker.lastSeen}` : "Worker down"}
+                title={
+                  status.worker.lastSeen
+                    ? `Worker last seen ${formatDateTime(status.worker.lastSeen, status.displayTimezone)}`
+                    : "Worker down"
+                }
               >
                 Worker
               </span>

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useActionFeedback } from "../client/actionFeedback.js";
+import { formatDateTime, getDisplayTimezone } from "../client/time.js";
 
 type AuthUser = {
   id: string;
@@ -67,13 +68,13 @@ async function api<T>(
   return body as T;
 }
 
-function summarizeFilters(filters: ExportFilters): string {
+function summarizeFilters(filters: ExportFilters, timezone: string): string {
   const parts: string[] = [];
   if (filters.from) {
-    parts.push(`from ${new Date(filters.from).toLocaleString()}`);
+    parts.push(`from ${formatDateTime(filters.from, timezone)}`);
   }
   if (filters.to) {
-    parts.push(`to ${new Date(filters.to).toLocaleString()}`);
+    parts.push(`to ${formatDateTime(filters.to, timezone)}`);
   }
   for (const filter of filters.jsonFilters) {
     parts.push(
@@ -91,6 +92,7 @@ export function ExportsPage({
   presetFilters,
   onPresetConsumed,
 }: ExportsPageProps) {
+  const timezone = getDisplayTimezone();
   const flash = useActionFeedback();
   const [exports, setExports] = useState<ExportJob[]>([]);
   const [versions, setVersions] = useState<QueryVersionOption[]>([]);
@@ -252,7 +254,7 @@ export function ExportsPage({
           </select>
         </label>
         {activeFilters ? (
-          <p className="muted">Filters: {summarizeFilters(activeFilters)}</p>
+          <p className="muted">Filters: {summarizeFilters(activeFilters, timezone)}</p>
         ) : null}
         <button type="submit" disabled={flash.anyBusy || !queryVersionId} aria-busy={flash.isBusy("export")}>
           {flash.isBusy("export") ? "Requesting…" : "Request export"}
@@ -275,11 +277,11 @@ export function ExportsPage({
           <tbody>
             {exports.map((job) => (
               <tr key={job.id}>
-                <td>{new Date(job.createdAt).toLocaleString()}</td>
+                <td>{formatDateTime(job.createdAt, timezone)}</td>
                 <td>{job.format}</td>
                 <td>{job.status}</td>
                 <td>{job.resultCount ?? "—"}</td>
-                <td>{new Date(job.expiresAt).toLocaleString()}</td>
+                <td>{formatDateTime(job.expiresAt, timezone)}</td>
                 <td className="row-actions-tight">
                   {job.status === "complete" ? (
                     <a href={`/api/exports/${job.id}/download`}>Download</a>

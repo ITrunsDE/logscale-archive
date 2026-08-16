@@ -325,6 +325,21 @@ describe("retention integration", () => {
     const cookie = parseSetCookie(bootstrap.headers["set-cookie"])!;
     const csrf = bootstrap.json().csrfToken as string;
 
+    const queryVersions = await app.inject({
+      method: "GET",
+      url: "/api/admin/retention/query-versions",
+      headers: { cookie },
+    });
+    expect(queryVersions.statusCode).toBe(200);
+    expect(queryVersions.json().queryVersions).toEqual([
+      expect.objectContaining({
+        id: queryVersionId,
+        connectionName: "RetentionConn-1",
+        queryName: "events",
+        versionNumber: 1,
+      }),
+    ]);
+
     const hold = await app.inject({
       method: "POST",
       url: "/api/admin/retention/holds",

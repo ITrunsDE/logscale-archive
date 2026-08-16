@@ -34,7 +34,7 @@ async function api<T>(
   const response = await fetch(url, {
     credentials: "include",
     headers: {
-      "content-type": "application/json",
+      ...(init?.body ? { "content-type": "application/json" } : {}),
       "x-csrf-token": csrfToken,
       ...(init?.headers ?? {}),
     },
@@ -104,6 +104,20 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
       flash.ok(`Revoked ${result.revoked} session(s).`);
     } catch {
       flash.err("Could not revoke sessions.");
+    }
+  }
+
+  async function onDeleteUser(entry: PublicUser) {
+    if (!window.confirm(`Delete user “${entry.username}”?`)) {
+      return;
+    }
+    flash.busy("Deleting user…", `delete:${entry.id}`);
+    try {
+      await api(csrfToken, `/api/admin/users/${entry.id}`, { method: "DELETE" });
+      flash.ok("User deleted.");
+      await reload();
+    } catch {
+      flash.err("Could not delete user.");
     }
   }
 
@@ -224,6 +238,16 @@ export function UsersPage({ user, csrfToken }: UsersPageProps) {
                     >
                       {flash.isBusy(`generate:${entry.id}`) ? "Generating…" : "Generate"}
                     </button>
+                    {entry.username !== "admin" ? (
+                      <button
+                        type="button"
+                        disabled={flash.anyBusy}
+                        aria-busy={flash.isBusy(`delete:${entry.id}`)}
+                        onClick={() => void onDeleteUser(entry)}
+                      >
+                        {flash.isBusy(`delete:${entry.id}`) ? "Deleting…" : "Delete"}
+                      </button>
+                    ) : null}
                   </div>
                   {resetUserId === entry.id && !generatedPassword ? (
                     <form className="reset-panel stack" onSubmit={onSetPassword}>

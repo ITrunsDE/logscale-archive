@@ -89,6 +89,9 @@ function mapBackupRow(row: BackupRow): BackupRun {
 }
 
 export function getMaintenanceState(env: NodeJS.ProcessEnv = process.env): MaintenanceState {
+  if (!env.DATA_PATH) {
+    return { active: false };
+  }
   const path = maintenancePath(env);
   if (!existsSync(path)) {
     return { active: false };

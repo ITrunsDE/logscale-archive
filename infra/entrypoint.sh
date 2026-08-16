@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-for var in DATABASE_URL SESSION_SECRET RECOVERY_SECRET ENCRYPTION_KEY; do
+for var in DATABASE_URL SESSION_SECRET RECOVERY_SECRET ENCRYPTION_KEY LOGSCALE_LOG_INGEST_TOKEN; do
   file_var="${var}_FILE"
   eval "path=\${${file_var}:-}"
   if [ -n "$path" ] && [ -f "$path" ]; then

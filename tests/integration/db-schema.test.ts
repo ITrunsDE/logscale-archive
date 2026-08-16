@@ -171,7 +171,11 @@ describe("database schema", () => {
       const { rows } = await db.query<{ id: string }>(
         "SELECT id FROM schema_migrations ORDER BY id",
       );
-      expect(rows.map((r) => r.id)).toEqual(["0001_initial"]);
+      expect(rows.map((r) => r.id)).toEqual([
+        "0001_initial",
+        "0002_query_run_cancelled",
+        "0003_backfill_active_query_schedules",
+      ]);
     } finally {
       await db.close();
     }

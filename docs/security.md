@@ -2,7 +2,7 @@
 
 ## Network
 
-- **Default:** web binds `127.0.0.1:8080` — localhost only.
+- **Default:** web container listens internally; its host port binds `127.0.0.1:8080` only.
 - **PostgreSQL:** never published in production compose. Worker has no host ports.
 - **Remote access:** VPN to host, or NGINX/operator TLS in front of web ([remote-access.md](remote-access.md)).
 
@@ -36,7 +36,13 @@ The application encrypts LogScale tokens at rest. It does **not** encrypt Postgr
 ## Authentication
 
 - Local accounts only (Argon2id, HTTP-only session cookie, CSRF on API).
-- Recovery admin CLI: `RECOVERY_SECRET` + `APP_ROLE=web node apps/web/dist/recovery.js …`
+- Recovery admin CLI requires `RECOVERY_SECRET`, `DATABASE_URL`, `ENCRYPTION_KEY`, `SESSION_SECRET`, and `APP_ROLE=web`:
+
+  ```bash
+  RECOVERY_SECRET='…' DATABASE_URL='postgres://…' ENCRYPTION_KEY='…' \
+    SESSION_SECRET='…' APP_ROLE=web node apps/web/dist/recovery.js \
+    --username admin --password '…'
+  ```
 - Failed login rate limiting enabled.
 
 ## Audit & logging

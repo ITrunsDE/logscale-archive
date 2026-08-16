@@ -391,17 +391,17 @@ export async function activateQueryVersion(db: Database, id: string): Promise<vo
      WHERE connection_id = $1 AND name = $2 AND id <> $3`,
     [row.connection_id, row.name, id],
   );
-  await db.query(`UPDATE query_versions SET active = true WHERE id = $1`, [id]);
-
-  if (row.schedule_cron) {
-    await db.query(
-      `INSERT INTO query_schedules (query_version_id, next_run_at, paused)
-       VALUES ($1, now(), false)
-       ON CONFLICT (query_version_id)
-       DO UPDATE SET next_run_at = now(), paused = false, updated_at = now()`,
-      [id],
-    );
-  }
+  await db.query(
+    `UPDATE query_versions SET active = true, schedule_cron = $2 WHERE id = $1`,
+    [id, normalizeScheduleCron(row.schedule_cron)],
+  );
+  await db.query(
+    `INSERT INTO query_schedules (query_version_id, next_run_at, paused)
+     VALUES ($1, now(), false)
+     ON CONFLICT (query_version_id)
+     DO UPDATE SET next_run_at = now(), paused = false, updated_at = now()`,
+    [id],
+  );
 }
 
 export async function deactivateQueryVersion(db: Database, id: string): Promise<void> {

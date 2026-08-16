@@ -1,0 +1,4 @@
+services:
+  nginx:
+    volumes:
+      - ${NGINX_CERT_PATH:?NGINX_CERT_PATH is required}:/etc/nginx/certs:ro

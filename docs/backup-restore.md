@@ -17,6 +17,8 @@ Encrypt the backup volume at the host/storage layer.
 
 Worker runs scheduled backups when not in maintenance mode. Status appears on **Operations** in the UI.
 
+Defaults: every 24 hours; failed backups retry after one hour; running backups older than 30 minutes become failed. Override with `BACKUP_INTERVAL_MS`, `BACKUP_FAIL_RETRY_MS`, and `BACKUP_STALE_RUNNING_MS` when needed.
+
 ## Manual backup
 
 ```bash
@@ -30,7 +32,7 @@ export BACKUP_PATH=/data/backups
 Admin-only workflow on **Operations**:
 
 1. Select backup.
-2. Type instance name to confirm.
+2. Type `INSTANCE_NAME` exactly to confirm.
 3. System creates a **safety backup** before restore.
 4. Maintenance mode blocks new jobs during restore.
 5. All sessions invalidated after restore.
@@ -58,6 +60,8 @@ A failed restore test is worse than no backup.
 ## Update guard
 
 Schema migrations on upgrade require a **recent successful backup**. If none exists, web refuses migration until backup succeeds.
+
+`BACKUP_MAX_AGE_MS` defaults to seven days.
 
 ## Exports
 

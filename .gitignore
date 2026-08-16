@@ -2,6 +2,9 @@
 .claude/
 .cursor/
 .worktrees/
+.agents/
+scripts/deploy-dev01.sh
+infra/secrets/
 
 # Working specifications and plans — never ship
 docs/superpowers/
@@ -21,3 +24,4 @@ playwright-report/
 .env.*
 !/.env.example
 graphify-out/
+PROJECT_NOTES.md

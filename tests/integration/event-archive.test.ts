@@ -42,6 +42,8 @@ function applyEnv(): void {
     DATABASE_URL,
     ENCRYPTION_KEY,
     SESSION_SECRET: "test-session-secret-at-least-32-characters-long",
+    DATA_PATH: "/tmp/archive-data",
+    BACKUP_PATH: "/tmp/archive-backups",
   });
 }
 
@@ -124,30 +126,24 @@ function mockMultiPageFetch(pages: unknown[][], pageSize = PAGE_SIZE): typeof fe
     const jobMatch = url.match(/queryjobs\/(job-\d+)(?:\/|$|\?)/);
     const jobId = jobMatch?.[1] ?? "job-1";
 
-    if (method === "GET" && url.includes(`/queryjobs/${jobId}`) && !url.includes("/results")) {
-      return new Response(JSON.stringify({ id: jobId, state: "done" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
-
-    if (method === "GET" && url.includes("/results")) {
+    if (method === "GET" && url.includes(`/queryjobs/${jobId}`) && url.includes("paginationOffset=")) {
       const parsed = new URL(url, "http://local");
-      const offset = Number(parsed.searchParams.get("offset") ?? 0);
+      const offset = Number(parsed.searchParams.get("paginationOffset") ?? 0);
       const pageIndex = Math.floor(offset / pageSize);
       const pageEvents = pages[pageIndex] ?? [];
       const done = pageIndex >= pages.length - 1;
       const total = pages.reduce((sum, page) => sum + page.length, 0);
       return new Response(
-        JSON.stringify({
-          events: pageEvents,
-          offset,
-          limit: pageSize,
-          total,
-          done,
-        }),
+        JSON.stringify({ events: pageEvents, offset, limit: pageSize, total, done }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
+    }
+
+    if (method === "GET" && url.includes(`/queryjobs/${jobId}`)) {
+      return new Response(JSON.stringify({ id: jobId, state: "done" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
 
     if (method === "DELETE") {

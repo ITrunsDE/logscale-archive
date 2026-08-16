@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Database } from "@archive/core";
 import {
   createUser,
+  deleteUser,
   findUserById,
   generateCompliantPassword,
   getPasswordPolicy,
@@ -64,6 +65,30 @@ export async function registerAdminUserRoutes(
         }
         throw error;
       }
+    },
+  );
+
+  app.delete(
+    "/api/admin/users/:userId",
+    { preHandler: requireRole("admin") },
+    async (request, reply) => {
+      requireCsrf(request, reply);
+      if (reply.sent) {
+        return;
+      }
+
+      const { userId } = request.params as { userId: string };
+      const outcome = await deleteUser(db, userId);
+      if (outcome === "not_found") {
+        reply.code(404).send({ error: "not_found" });
+        return;
+      }
+      if (outcome === "protected") {
+        reply.code(403).send({ error: "protected_user" });
+        return;
+      }
+      await recordAuditAction(db, request, "admin.user_delete", { targetUserId: userId });
+      reply.code(204).send();
     },
   );
 
