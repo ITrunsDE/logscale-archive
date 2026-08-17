@@ -6,6 +6,7 @@ import {
   encryptSecret,
   encryptedSecretFromBytes,
   encryptedSecretToBytes,
+  stripTrailingSlashes,
   validateConnection,
 } from "@archive/core";
 import { requireCsrf, requireRole } from "../auth/guards.js";
@@ -161,7 +162,7 @@ export async function registerLogscaleConnectionRoutes(
         token?: string;
       };
       const name = body.name?.trim();
-      const endpoint = body.endpoint?.trim().replace(/\/+$/, "");
+      const endpoint = body.endpoint ? stripTrailingSlashes(body.endpoint.trim()) : "";
       const repository = body.repository?.trim();
       const token = body.token?.trim();
 
@@ -217,7 +218,7 @@ export async function registerLogscaleConnectionRoutes(
         token?: string;
       };
       const name = body.name?.trim();
-      const endpoint = body.endpoint?.trim().replace(/\/+$/, "");
+      const endpoint = body.endpoint ? stripTrailingSlashes(body.endpoint.trim()) : "";
       const repository = body.repository?.trim();
       const token = body.token?.trim();
 

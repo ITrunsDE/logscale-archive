@@ -5,10 +5,12 @@ export type QueryValidation = {
   errors: string[];
 };
 
-const HEAD_PATTERN = /\bhead\s*\(/i;
-const TAIL_LIMIT_PATTERN = /\btail\s*\(\s*\d+/i;
-const FIXED_WINDOW_PATTERN =
-  /\btimeChart\s*\(|#(?:timeChart|bucket)\b|\bbucket\s*\([^)]*,\s*[^)]+\)|\bspan\s*=\s*\d+/i;
+const HEAD_PATTERN = /\bhead\s{0,20}\(/i;
+const TAIL_LIMIT_PATTERN = /\btail\s{0,20}\(\s{0,20}\d+/i;
+const TIME_CHART_CALL = /\btimeChart\s{0,20}\(/i;
+const HASH_WINDOW = /#(?:timeChart|bucket)\b/i;
+const BUCKET_CALL = /\bbucket\s{0,20}\([^)]{0,200},\s{0,20}[^)]{1,200}\)/i;
+const SPAN_EQ = /\bspan\s{0,20}=\s{0,20}\d+/i;
 
 export function validateQueryText(queryText: string, mode: QueryMode): QueryValidation {
   const errors: string[] = [];
@@ -23,7 +25,13 @@ export function validateQueryText(queryText: string, mode: QueryMode): QueryVali
   if (TAIL_LIMIT_PATTERN.test(queryText)) {
     errors.push("tail(n) with a numeric limit is not allowed; the collector controls result limits");
   }
-  if (mode === "aggregate" && !FIXED_WINDOW_PATTERN.test(queryText)) {
+  if (
+    mode === "aggregate" &&
+    !TIME_CHART_CALL.test(queryText) &&
+    !HASH_WINDOW.test(queryText) &&
+    !BUCKET_CALL.test(queryText) &&
+    !SPAN_EQ.test(queryText)
+  ) {
     errors.push("Aggregate queries must declare a fixed time window");
   }
 

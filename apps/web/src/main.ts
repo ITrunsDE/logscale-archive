@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,6 +35,11 @@ export async function buildServer() {
   await migrateDatabase(config.databaseUrl);
 
   const app = Fastify({ logger: true, trustProxy: true });
+
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: "1 minute",
+  });
 
   await app.register(cookie, {
     secret: config.sessionSecret,

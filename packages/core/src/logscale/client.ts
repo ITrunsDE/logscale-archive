@@ -12,6 +12,14 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 export class LogScaleClient {
   private readonly baseUrl: string;
   private readonly repository: string;
@@ -21,7 +29,7 @@ export class LogScaleClient {
   private readonly maxRetries: number;
 
   constructor(config: LogScaleClientConfig) {
-    this.baseUrl = config.endpoint.replace(/\/+$/, "");
+    this.baseUrl = stripTrailingSlashes(config.endpoint);
     this.repository = config.repository;
     this.token = config.token;
     this.fetchImpl = config.fetch ?? fetch;

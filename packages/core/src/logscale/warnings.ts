@@ -1,4 +1,5 @@
-const RESULT_CAP_PATTERN = /result\s*(limit|cap)|truncat|exceeded.*limit|too many/i;
+const RESULT_CAP_PATTERN =
+  /result\s{0,20}(limit|cap)|truncat|exceeded.{0,80}limit|too many/i;
 
 export function parseQueryJobWarnings(body: Record<string, unknown>): string[] {
   const warnings: string[] = [];

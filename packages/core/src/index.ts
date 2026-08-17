@@ -63,7 +63,7 @@ export {
   parseEncryptionKeyHex,
   type EncryptedSecret,
 } from "./security/encryption.js";
-export { LogScaleClient, sanitizeErrorMessage } from "./logscale/client.js";
+export { LogScaleClient, sanitizeErrorMessage, stripTrailingSlashes } from "./logscale/client.js";
 export { validateConnection } from "./logscale/validateToken.js";
 export type {
   ConnectionValidation,

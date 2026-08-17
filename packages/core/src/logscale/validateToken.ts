@@ -1,5 +1,5 @@
 import type { ConnectionValidation, FetchFn, ValidateConnectionInput } from "./types.js";
-import { sanitizeErrorMessage } from "./client.js";
+import { sanitizeErrorMessage, stripTrailingSlashes } from "./client.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const READ_PERMISSIONS = new Set([
@@ -15,7 +15,7 @@ export async function validateConnection(
   input: ValidateConnectionInput,
 ): Promise<ConnectionValidation> {
   const fetchImpl = input.fetch ?? fetch;
-  const baseUrl = input.endpoint.replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes(input.endpoint);
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const permissionWarnings: string[] = [];
   let serverVersion: string | undefined;

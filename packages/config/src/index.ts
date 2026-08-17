@@ -37,6 +37,14 @@ function required(name: string, env: NodeJS.ProcessEnv): string {
   return value;
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function isLocalBindHost(bindHost: string): boolean {
   return bindHost === "127.0.0.1" || bindHost === "localhost" || bindHost === "::1";
 }
@@ -101,7 +109,7 @@ function loadOperationsLogConfig(env: NodeJS.ProcessEnv): OperationsLogConfig {
   if (transport !== "logscale") {
     throw new Error("LOG_TRANSPORT must be stdout or logscale");
   }
-  const endpoint = required("LOGSCALE_LOG_ENDPOINT", env).replace(/\/+$/, "");
+  const endpoint = stripTrailingSlashes(required("LOGSCALE_LOG_ENDPOINT", env));
   const ingestToken = required("LOGSCALE_LOG_INGEST_TOKEN", env);
   try {
     const url = new URL(endpoint);
